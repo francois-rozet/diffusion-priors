@@ -1,0 +1,19 @@
+name: priors
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+dependencies:
+  - jupyter=1.0.0
+  - numpy=1.26.0
+  - pip=23.3.1
+  - python=3.9.18
+  - pytorch=2.0.1
+  - pytorch-cuda=11.7
+  - torchvision=0.15.2
+  - pip:
+    - dawgz==0.4.2
+    - lampe==0.8.2
+    - matplotlib==3.8.1
+    - tqdm==4.66.1
+    - zuko==1.0.0
