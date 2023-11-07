@@ -46,6 +46,7 @@ class MLP(nn.Sequential):
         out_features: The number of output features.
         hidden_features: The number of hidden features.
         activation: The activation function constructor.
+        normalize: Whether features are normalized between layers or not.
         kwargs: Keyword arguments passed to :class:`nn.Linear`.
     """
 
@@ -55,6 +56,7 @@ class MLP(nn.Sequential):
         out_features: int,
         hidden_features: Sequence[int] = (64, 64),
         activation: Callable[[], nn.Module] = nn.ReLU,
+        normalize: bool = False,
         **kwargs,
     ):
         layers = []
@@ -63,10 +65,13 @@ class MLP(nn.Sequential):
             (in_features, *hidden_features),
             (*hidden_features, out_features),
         ):
-            layers.append(nn.Linear(before, after, **kwargs))
-            layers.append(activation())
+            layers.extend([
+                nn.Linear(before, after, **kwargs),
+                activation(),
+                LayerNorm() if normalize else None,
+            ])
 
-        layers.pop()
+        layers = filter(lambda l: l is not None, layers[:-2])
 
         super().__init__(*layers)
 
