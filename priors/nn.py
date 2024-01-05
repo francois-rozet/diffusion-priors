@@ -1,41 +1,17 @@
 r"""Neural networks"""
 
-import torch
-import torch.nn as nn
+import inox.nn as nn
 
-from torch import Tensor
+from inox.random import PRNG, get_rng
+from jax import Array
 from typing import *
 
 
 class Residual(nn.Sequential):
     r"""Creates a residual block."""
 
-    def forward(self, x: Tensor) -> Tensor:
-        return x + super().forward(x)
-
-
-class LayerNorm(nn.Module):
-    r"""Creates a normalization layer that standardizes features along a dimension.
-
-    References:
-       Layer Normalization (Lei Ba et al., 2016)
-       https://arxiv.org/abs/1607.06450
-
-    Arguments:
-        dim: The dimension(s) to standardize.
-        eps: A numerical stability term.
-    """
-
-    def __init__(self, dim: Union[int, Iterable[int]] = -1, eps: float = 1e-5):
-        super().__init__()
-
-        self.dim = dim if type(dim) is int else tuple(dim)
-        self.eps = eps
-
-    def forward(self, x: Tensor) -> Tensor:
-        variance, mean = torch.var_mean(x, unbiased=True, dim=self.dim, keepdim=True)
-
-        return (x - mean) / (variance + self.eps).sqrt()
+    def __call__(self, x: Array) -> Array:
+        return x + super().__call__(x)
 
 
 class MLP(nn.Sequential):
@@ -47,6 +23,7 @@ class MLP(nn.Sequential):
         hidden_features: The number of hidden features.
         activation: The activation function constructor.
         normalize: Whether features are normalized between layers or not.
+        key: A PRNG key for initialization.
         kwargs: Keyword arguments passed to :class:`nn.Linear`.
     """
 
@@ -57,8 +34,14 @@ class MLP(nn.Sequential):
         hidden_features: Sequence[int] = (64, 64),
         activation: Callable[[], nn.Module] = nn.ReLU,
         normalize: bool = False,
+        key: Array = None,
         **kwargs,
     ):
+        if key is None:
+            rng = get_rng()
+        else:
+            rng = PRNG(key)
+
         layers = []
 
         for before, after in zip(
@@ -66,14 +49,11 @@ class MLP(nn.Sequential):
             (*hidden_features, out_features),
         ):
             layers.extend([
-                nn.Linear(before, after, **kwargs),
+                nn.Linear(before, after, **kwargs, key=rng.split()),
                 activation(),
-                LayerNorm() if normalize else None,
+                nn.LayerNorm() if normalize else None,
             ])
 
         layers = filter(lambda l: l is not None, layers[:-2])
 
         super().__init__(*layers)
-
-        self.in_features = in_features
-        self.out_features = out_features

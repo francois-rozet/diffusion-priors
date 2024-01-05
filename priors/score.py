@@ -1,29 +1,37 @@
 r"""Score helpers"""
 
+import inox
+import inox.nn as nn
+import jax
+import jax.numpy as jnp
 import math
-import torch
-import torch.nn as nn
 
-from torch import Tensor
-from tqdm import tqdm
+from inox.random import get_rng
+from jax import Array
 from typing import *
 
 
 class TimeEmbedding(nn.Sequential):
-    def __init__(self, features: int, freqs: int = 8):
+    def __init__(self, features: int, freqs: int = 8, key: Array = None):
+        if key is None:
+            keys = get_rng().split(2)
+        else:
+            keys = jax.random.split(key, 2)
+
         super().__init__(
-            nn.Linear(2 * freqs, 256),
+            nn.Linear(2 * freqs, 256, key=keys[0]),
             nn.ReLU(),
-            nn.Linear(256, features),
+            nn.Linear(256, features, key=keys[1]),
         )
 
-        self.register_buffer('freqs', torch.pi * torch.arange(1, freqs + 1))
+        self.freqs = jnp.pi * jnp.arange(1, freqs + 1)
 
-    def forward(self, t: Tensor) -> Tensor:
-        t = self.freqs * t.unsqueeze(dim=-1)
-        t = torch.cat((t.cos(), t.sin()), dim=-1)
+    @inox.jit
+    def __call__(self, t: Array) -> Array:
+        t = self.freqs * t[..., None]
+        t = jnp.concatenate((jnp.cos(t), jnp.sin(t)), axis=-1)
 
-        return super().forward(t)
+        return super().__call__(t)
 
 
 class SDE(nn.Module):
@@ -48,22 +56,22 @@ class VPSDE(SDE):
     """
 
     def __init__(self, eta: float = 1e-4):
-        super().__init__()
-
         self.eta = eta
 
-    def alpha(self, t: Tensor) -> Tensor:
-        return torch.cos(math.acos(math.sqrt(self.eta)) * t) ** 2
+    @inox.jit
+    def alpha(self, t: Array) -> Array:
+        return jnp.cos(math.acos(math.sqrt(self.eta)) * t) ** 2
 
-    def sigma(self, t: Tensor) -> Tensor:
-        return torch.sqrt(1 - self.alpha(t) ** 2 + self.eta ** 2)
+    @inox.jit
+    def sigma(self, t: Array) -> Array:
+        return jnp.sqrt(1 - self.alpha(t) ** 2 + self.eta ** 2)
 
-    def forward(self, x: Tensor, t: Tensor) -> Tuple[Tensor, Tensor]:
+    @inox.jit
+    def __call__(self, x: Array, z: Array, t: Array) -> Array:
         t = t[..., None]
-        z = torch.randn_like(x)
         x = self.alpha(t) * x + self.sigma(t) * z
 
-        return x, z
+        return x
 
 
 class ReverseSDE(nn.Module):
@@ -84,37 +92,52 @@ class ReverseSDE(nn.Module):
         else:
             self.sde = sde
 
-    @torch.no_grad()
-    def forward(
+    def __call__(
         self,
-        x: Tensor,  # x(1)
+        shape: Sequence[int],
         steps: int = 64,
         corrections: int = 0,
         tau: float = 1.0,
-    ) -> Tensor:
-        time = torch.linspace(1, 0, steps + 1).to(x)
-        dt = 1 / steps
+        key: Array = None,
+    ) -> Array:
+        if key is None:
+            key = get_rng().split()
 
-        for t in tqdm(time[:-1]):
+        dt = 1 / steps
+        time = jnp.linspace(1 - dt, 0, steps)
+        keys = jax.random.split(key, steps)
+        z = jax.random.normal(key, shape)
+
+        def f(x, t_key):
+            t, key = t_key
+
             # Predictor
-            r = self.sde.alpha(t - dt) / self.sde.alpha(t)
-            x = r * x + (self.sde.sigma(t - dt) - r * self.sde.sigma(t)) * self.model(x, t)
+            r = self.sde.alpha(t) / self.sde.alpha(t + dt)
+            x = r * x + (self.sde.sigma(t) - r * self.sde.sigma(t + dt)) * self.model(x, t + dt)
 
             # Corrector
-            for _ in range(corrections):
-                z = torch.randn_like(x)
-                s = -self.model(x, t - dt) / self.sde.sigma(t - dt)
-                delta = tau / s.square().mean(dim=-1, keepdim=True)
+            if corrections > 0:
+                for subkey in jax.random.split(key, corrections):
+                    z = jax.random.normal(subkey, x.shape)
+                    s = self.model(x, t)
 
-                x = x + delta * s + torch.sqrt(2 * delta) * z
+                    x = x - (tau * s + math.sqrt(2 * tau) * z) * self.sde.sigma(t)
+
+            return x, None
+
+        x, _ = jax.lax.scan(f, z, (time, keys))
 
         return x
 
-    def loss(self, x: Tensor) -> Tensor:
-        t = torch.rand_like(x[..., 0])
-        x, z = self.sde(x, t)
+    def loss(self, key: Array, x: Array) -> Array:
+        keys = jax.random.split(key, 2)
 
-        return (self.model(x, t) - z).square().mean()
+        t = jax.random.uniform(keys[0], x.shape[:-1])
+        z = jax.random.uniform(keys[1], x.shape)
+
+        x = self.sde(x, t)
+
+        return jnp.mean(jnp.square(self.model(x, t) - z))
 
 
 class StandardScoreModel(nn.Module):
@@ -134,8 +157,9 @@ class StandardScoreModel(nn.Module):
         else:
             self.sde = sde
 
-    def forward(self, x: Tensor, t: Tensor) -> Tensor:
-        return x * self.sde.sigma(t[..., None])
+    @inox.jit
+    def __call__(self, x: Array, t: Array) -> Array:
+        return x * self.sde.sigma(t)[..., None]
 
 
 class PosteriorScoreModel(nn.Module):
@@ -150,39 +174,40 @@ class PosteriorScoreModel(nn.Module):
     def __init__(
         self,
         model: nn.Module,
-        y: Tensor,
-        A: Callable[[Tensor], Tensor],
-        noise: Union[float, Tensor],
-        gamma: Union[float, Tensor] = 1.0,
+        y: Array,
+        A: Callable[[Array], Array],
+        noise: Union[float, Array],
+        gamma: Union[float, Array] = 1.0,
         sde: SDE = None,
     ):
         super().__init__()
 
-        self.register_buffer('y', y)
-        self.register_buffer('noise', torch.as_tensor(noise))
-        self.register_buffer('gamma', torch.as_tensor(gamma))
-
         self.model = model
+        self.y = y
         self.A = A
+        self.noise = noise
+        self.gamma = gamma
 
         if sde is None:
             self.sde = VPSDE()
         else:
             self.sde = sde
 
-    def forward(self, x: Tensor, t: Tensor) -> Tensor:
+    @inox.jit
+    def __call__(self, x: Array, t: Array) -> Array:
         alpha, sigma = self.sde.alpha(t), self.sde.sigma(t)
 
-        with torch.enable_grad():
-            x = x.clone().requires_grad_()
+        def log_prob(x):
             z = self.model(x, t)
             x_hat = (x - sigma * z) / alpha
 
-            err = (self.y - self.A(x_hat)).square()
+            err = (self.y - self.A(x_hat)) ** 2
             var = self.noise ** 2 + self.gamma * (sigma / alpha) ** 2
 
-            log_p = -(err / var).sum() / 2
+            log_p = -jnp.sum(err / var) / 2
 
-        s, = torch.autograd.grad(log_p, x)
+            return log_p, z
+
+        s, z = jax.grad(log_prob, has_aux=True)(x)
 
         return z - sigma * s
