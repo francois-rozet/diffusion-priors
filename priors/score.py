@@ -4,91 +4,81 @@ import inox
 import inox.nn as nn
 import jax
 import jax.numpy as jnp
-import math
 
 from inox.random import get_rng
 from jax import Array
 from typing import *
 
 
-class TimeEmbedding(nn.Sequential):
-    def __init__(self, features: int, freqs: int = 8, key: Array = None):
+class NoiseEmbedding(nn.Sequential):
+    r"""Creates a noise embedding module.
+
+    Arguments:
+        features: The number of embedding features.
+        key: A PRNG key for initialization.
+    """
+
+    def __init__(self, features: int, key: Array = None):
         if key is None:
             keys = get_rng().split(2)
         else:
             keys = jax.random.split(key, 2)
 
         super().__init__(
-            nn.Linear(2 * freqs, 256, key=keys[0]),
+            nn.Linear(1, 256, key=keys[0]),
             nn.ReLU(),
             nn.Linear(256, features, key=keys[1]),
         )
 
-        self.freqs = jnp.pi * jnp.arange(1, freqs + 1)
-
-    @inox.jit
-    def __call__(self, t: Array) -> Array:
-        t = self.freqs * t[..., None]
-        t = jnp.concatenate((jnp.cos(t), jnp.sin(t)), axis=-1)
-
-        return super().__call__(t)
+    def __call__(self, sigma: Array) -> Array:
+        return super().__call__(jnp.log(sigma))
 
 
-class SDE(nn.Module):
-    r"""Abstract stochastic differential equation (SDE)."""
+class VESDE(nn.Module):
+    r"""Variance exploding (VE) SDE.
 
-    pass
-
-
-class VPSDE(SDE):
-    r"""Variance preserving (VP) SDE.
-
-    .. math:: x(t) = \alpha(t) x + \sigma(t) z
+    .. math:: x(t) = x + \sigma(t) z
 
     with
 
-    .. math::
-        \alpha(t) & = \cos(\arccos(\sqrt{\eta}) t)^2 \\
-        \sigma(t)^2 & = 1 - \alpha(t)^2 + \eta^2
+    .. math:: \sigma(t) = \tan(\arctan(a) (1 - t) + \arctan(b) t)
 
     Arguments:
-        eta: A numerical stability term.
+        a: The noise lower bound.
+        b: The noise upper bound.
     """
 
-    def __init__(self, eta: float = 1e-4):
-        self.eta = eta
+    def __init__(self, a: Array = 1e-3, b: Array = 1e2):
+        self.a = jnp.arctan(a)
+        self.b = jnp.arctan(b)
 
-    @inox.jit
-    def alpha(self, t: Array) -> Array:
-        return jnp.cos(math.acos(math.sqrt(self.eta)) * t) ** 2
-
-    @inox.jit
-    def sigma(self, t: Array) -> Array:
-        return jnp.sqrt(1 - self.alpha(t) ** 2 + self.eta ** 2)
-
-    @inox.jit
+    @jax.jit
     def __call__(self, x: Array, z: Array, t: Array) -> Array:
-        t = t[..., None]
-        x = self.alpha(t) * x + self.sigma(t) * z
+        sigma = self.sigma(t)
+        sigma = sigma[..., None]
 
-        return x
+        return x + sigma * z
+
+    @jax.jit
+    def sigma(self, t: Array) -> Array:
+        return jnp.tan(self.a + (self.b - self.a) * t)
 
 
 class ReverseSDE(nn.Module):
     r"""Predictor-corrector sampler for the reverse SDE.
 
     Arguments:
-        model: A model of the score/noise :math:`\epsilon(x(t), t)`.
+        model: A score/noise model :math:`z(x(t), t)`.
         sde: The forward SDE.
     """
 
-    def __init__(self, model: nn.Module, sde: SDE = None):
+    def __init__(self, model: nn.Module, sde: VESDE = None):
         super().__init__()
 
-        self.model = model  # epsilon(x(t), t) = -sigma(t) * score(x(t), t)
+        self.model = model
 
         if sde is None:
-            self.sde = VPSDE()
+            self.sde = VESDE()
         else:
             self.sde = sde
 
@@ -97,73 +87,124 @@ class ReverseSDE(nn.Module):
         shape: Sequence[int],
         steps: int = 64,
         corrections: int = 0,
-        tau: float = 1.0,
+        tau: Array = 0.5,
         key: Array = None,
     ) -> Array:
+        tau = jnp.asarray(tau)
+
         if key is None:
             key = get_rng().split()
 
         dt = 1 / steps
         time = jnp.linspace(1 - dt, 0, steps)
-        keys = jax.random.split(key, steps)
-        z = jax.random.normal(key, shape)
+        keys = jax.random.split(key, (steps, corrections))
+        x = jax.random.normal(key, shape) * self.sde.sigma(1.0)
 
-        def f(x, t_key):
-            t, key = t_key
+        def f(x, t_keys):
+            t, keys = t_keys
 
-            # Predictor
-            r = self.sde.alpha(t) / self.sde.alpha(t + dt)
-            x = r * x + (self.sde.sigma(t) - r * self.sde.sigma(t + dt)) * self.model(x, t + dt)
+            x = self.predict(x, t + dt, t)
 
-            # Corrector
-            if corrections > 0:
-                for subkey in jax.random.split(key, corrections):
-                    z = jax.random.normal(subkey, x.shape)
-                    s = self.model(x, t)
-
-                    x = x - (tau * s + math.sqrt(2 * tau) * z) * self.sde.sigma(t)
+            for key in keys:
+                x = self.correct(x, t, tau, key)
 
             return x, None
 
-        x, _ = jax.lax.scan(f, z, (time, keys))
+        x, _ = jax.lax.scan(f, x, (time, keys))
 
         return x
 
-    def loss(self, key: Array, x: Array) -> Array:
-        keys = jax.random.split(key, 2)
+    @inox.jit
+    def predict(self, x: Array, s: Array, t: Array) -> Array:
+        return x + (self.sde.sigma(t) - self.sde.sigma(s)) * self.model(x, s)
 
-        t = jax.random.uniform(keys[0], x.shape[:-1])
-        z = jax.random.uniform(keys[1], x.shape)
+    @inox.jit
+    def correct(self, x: Array, t: Array, tau: Array, key: Array) -> Array:
+        z = self.model(x, t)
+        eps = jax.random.normal(key, x.shape)
+        norm = jnp.mean(z**2, axis=-1, keepdims=True)
+        delta = tau / jnp.clip(norm, a_min=1.0)
 
-        x = self.sde(x, t)
+        return x - self.sde.sigma(t) * (delta * z + jnp.sqrt(2 * delta) * eps)
 
-        return jnp.mean(jnp.square(self.model(x, t) - z))
+
+class ScoreModel(nn.Module):
+    r"""Score model.
+
+    .. math:: z(x(t), t)
+        & = -\sigma(t) * score(x(t), t) \\
+        & = \sigma(t) x(t) / (\sigma(t)^2 + 1)
+        + 1 / \sqrt{\sigma(t)^2 + 1} network(x(t) / \sqrt{\sigma(t)^2 + 1}, \log \sigma(t))
+
+    References:
+        | Elucidating the Design Space of Diffusion-Based Generative Models (Karras et al., 2022)
+        | https://arxiv.org/abs/2206.00364
+
+    Arguments:
+        TODO
+    """
+
+    def __init__(
+        self,
+        network: nn.Module,
+        embedding: int = 64,
+        sde: VESDE = None,
+        key: Array = None,
+    ):
+        self.network = network
+        self.embed = NoiseEmbedding(embedding, key=key)
+
+        if sde is None:
+            self.sde = VESDE()
+        else:
+            self.sde = sde
+
+    @inox.jit
+    def __call__(self, xt: Array, t: Array) -> Array:
+        sigma = self.sde.sigma(t)
+        sigma = sigma[..., None]
+        denum = jnp.sqrt(sigma ** 2 + 1)
+
+        return xt / (sigma + 1 / sigma) + 1 / denum * self.network(xt / denum, self.embed(sigma))
+
+    @inox.jit
+    def loss(self, x: Array, z: Array, t: Array, A: Callable = None) -> Array:
+        sigma = self.sde.sigma(t)
+        sigma = sigma[..., None]
+
+        err = z - self(x + sigma * z, t)
+
+        if callable(A):
+            err = A(err)
+
+        return jnp.mean(err ** 2)
 
 
 class StandardScoreModel(nn.Module):
     r"""Score model for a standard Gaussian random variable.
 
-    .. math:: \epsilon(x(t), t) = -\sigma(t) x(t)
+    .. math:: z(x(t), t) = \sigma(t) x(t) / (\sigma(t)^2 + 1)
 
     Arguments:
         sde: The forward SDE.
     """
 
-    def __init__(self, sde: SDE = None):
-        super().__init__()
-
+    def __init__(self, sde: VESDE = None):
         if sde is None:
-            self.sde = VPSDE()
+            self.sde = VESDE()
         else:
             self.sde = sde
 
     @inox.jit
-    def __call__(self, x: Array, t: Array) -> Array:
-        return x * self.sde.sigma(t)[..., None]
+    def __call__(self, xt: Array, t: Array) -> Array:
+        sigma = self.sde.sigma(t)
+        sigma = sigma[..., None]
+
+        return xt / (sigma + 1 / sigma)
 
 
 class PosteriorScoreModel(nn.Module):
-    r"""Posterior score model for a Gaussian observation
+    r"""Posterior score model for a Gaussian observation.
 
     .. math:: p(y | x) = N(y | A(x), \Sigma_y)
 
@@ -174,40 +215,41 @@ class PosteriorScoreModel(nn.Module):
     def __init__(
         self,
         model: nn.Module,
-        y: Array,
         A: Callable[[Array], Array],
+        y: Array,
         noise: Union[float, Array],
         gamma: Union[float, Array] = 1.0,
-        sde: SDE = None,
+        sde: VESDE = None,
     ):
         super().__init__()
 
         self.model = model
-        self.y = y
         self.A = A
-        self.noise = noise
-        self.gamma = gamma
+        self.y = jnp.asarray(y)
+        self.noise = jnp.asarray(noise)
+        self.gamma = jnp.asarray(gamma)
 
         if sde is None:
-            self.sde = VPSDE()
+            self.sde = VESDE()
         else:
             self.sde = sde
 
     @inox.jit
-    def __call__(self, x: Array, t: Array) -> Array:
-        alpha, sigma = self.sde.alpha(t), self.sde.sigma(t)
+    def __call__(self, xt: Array, t: Array) -> Array:
+        sigma = self.sde.sigma(t)
+        sigma = sigma[..., None]
 
-        def log_prob(x):
-            z = self.model(x, t)
-            x_hat = (x - sigma * z) / alpha
+        def log_prob(xt):
+            z = self.model(xt, t)
+            x = xt - sigma * z
 
-            err = (self.y - self.A(x_hat)) ** 2
-            var = self.noise ** 2 + self.gamma * (sigma / alpha) ** 2
+            err = (self.y - self.A(x)) ** 2
+            var = self.noise ** 2 + self.gamma * sigma ** 2
 
             log_p = -jnp.sum(err / var) / 2
 
             return log_p, z
 
-        s, z = jax.grad(log_prob, has_aux=True)(x)
+        s, z = jax.grad(log_prob, has_aux=True)(xt)
 
         return z - sigma * s
