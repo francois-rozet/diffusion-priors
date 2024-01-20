@@ -174,12 +174,9 @@ class Heun(Euler):
 
 
 class ScoreModel(nn.Module):
-    r"""Score model.
+    r"""Score model based on the EDM preconditioning.
 
-    .. math:: z(x(t), t)
-        & = -\sigma(t) * score(x(t), t) \\
-        & = \sigma(t) x(t) / (\sigma(t)^2 + 1)
-        + 1 / \sqrt{\sigma(t)^2 + 1} network(x(t) / \sqrt{\sigma(t)^2 + 1}, \log \sigma(t))
+    .. math:: z(x(t), t) \approx E[z | x(t)]
 
     References:
         | Elucidating the Design Space of Diffusion-Based Generative Models (Karras et al., 2022)
@@ -211,17 +208,37 @@ class ScoreModel(nn.Module):
 
         return xt / (sigma + 1 / sigma) + 1 / denum * self.net(xt / denum, self.emb(sigma), key)
 
+
+class MeasureLoss(nn.Module):
+    r"""Measurement loss for a score/noise model.
+
+    .. math:: \frac{1}{\sigma(t)^2} || A(x) - A((x(t) - \sigma(t) z(x(t), t))) ||^2
+
+    Arguments:
+        sde: The forward SDE.
+    """
+
+    def __init__(self, sde: VESDE = None):
+        if sde is None:
+            self.sde = VESDE()
+        else:
+            self.sde = sde
+
     @inox.jit
-    def loss(self, x: Array, z: Array, t: Array, A: Callable = None) -> Array:
+    def __call__(self, model: nn.Module, x: Array, z: Array, t: Array, A: Callable = None, key: Array = None) -> Array:
         sigma = self.sde.sigma(t)
         sigma = sigma[..., None]
+        lmbda = 1 / sigma ** 2
 
-        err = z - self(x + sigma * z, t)
+        xt = self.sde(x, z, t)
+        x0 = xt - sigma * model(xt, t, key)
 
-        if callable(A):
-            err = A(err)
+        if A is None:
+            err = x - x0
+        else:
+            err = A(x) - A(x0)
 
-        return jnp.mean(err ** 2)
+        return jnp.mean(lmbda * jnp.mean(err ** 2, axis=-1, keepdims=True))
 
 
 class StandardScoreModel(nn.Module):
