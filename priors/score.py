@@ -4,34 +4,30 @@ import inox
 import inox.nn as nn
 import jax
 import jax.numpy as jnp
+import math
 
 from inox.random import PRNG, get_rng
 from jax import Array
 from typing import *
 
 
-class NoiseEmbedding(nn.Sequential):
+class NoiseEmbedding(nn.Module):
     r"""Creates a noise embedding module.
 
     Arguments:
         features: The number of embedding features.
-        key: A PRNG key for initialization.
     """
 
-    def __init__(self, features: int, key: Array = None):
-        if key is None:
-            keys = get_rng().split(2)
-        else:
-            keys = jax.random.split(key, 2)
-
-        super().__init__(
-            nn.Linear(1, 256, key=keys[0]),
-            nn.ReLU(),
-            nn.Linear(256, features, key=keys[1]),
-        )
+    def __init__(self, features: int):
+        self.anchors = jnp.linspace(math.log(1e-4), math.log(1e3), features)
+        self.scale = jnp.square(features / (math.log(1e3) - math.log(1e-4)))
 
     def __call__(self, sigma: Array) -> Array:
-        return super().__call__(jnp.log(sigma))
+        x = jnp.log(sigma)
+        x = -self.scale * (x - self.anchors) ** 2
+        x = jax.nn.softmax(x, axis=-1)
+
+        return x
 
 
 class VESDE(nn.Module):
@@ -196,12 +192,11 @@ class ScoreModel(nn.Module):
     def __init__(
         self,
         network: nn.Module,
-        embedding: int = 64,
+        emb_features: int = 64,
         sde: VESDE = None,
-        key: Array = None,
     ):
-        self.network = network
-        self.embed = NoiseEmbedding(embedding, key=key)
+        self.net = network
+        self.emb = NoiseEmbedding(emb_features)
 
         if sde is None:
             self.sde = VESDE()
@@ -209,12 +204,12 @@ class ScoreModel(nn.Module):
             self.sde = sde
 
     @inox.jit
-    def __call__(self, xt: Array, t: Array) -> Array:
+    def __call__(self, xt: Array, t: Array, key: Array = None) -> Array:
         sigma = self.sde.sigma(t)
         sigma = sigma[..., None]
         denum = jnp.sqrt(sigma ** 2 + 1)
 
-        return xt / (sigma + 1 / sigma) + 1 / denum * self.network(xt / denum, self.embed(sigma))
+        return xt / (sigma + 1 / sigma) + 1 / denum * self.net(xt / denum, self.emb(sigma), key)
 
     @inox.jit
     def loss(self, x: Array, z: Array, t: Array, A: Callable = None) -> Array:
