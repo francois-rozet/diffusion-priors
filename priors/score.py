@@ -5,7 +5,7 @@ import inox.nn as nn
 import jax
 import jax.numpy as jnp
 
-from inox.random import get_rng
+from inox.random import PRNG, get_rng
 from jax import Array
 from typing import *
 
@@ -64,11 +64,69 @@ class VESDE(nn.Module):
         return jnp.tan(self.a + (self.b - self.a) * t)
 
 
-class ReverseSDE(nn.Module):
-    r"""Predictor-corrector sampler for the reverse SDE.
+class PredictorCorrector(nn.Module):
+    r"""Predictor-Corrector sampler for the reverse SDE.
 
     Arguments:
-        model: A score/noise model :math:`z(x(t), t)`.
+        model: A score/noise model :math:`z(x(t), t) \approx E[z | x(t)]`.
+        sde: The forward SDE.
+    """
+
+    def __init__(self, model: nn.Module, sde: VESDE = None, tau: Array = 1e-2):
+        super().__init__()
+
+        self.model = model
+
+        if sde is None:
+            self.sde = VESDE()
+        else:
+            self.sde = sde
+
+        self.tau = jnp.asarray(tau)
+
+    @inox.jit
+    def __call__(self, z: Array, key: Array, steps: int = 64, corrections: int = 1) -> Array:
+        dt = jnp.asarray(1 / steps)
+        time = jnp.linspace(1, dt, steps)
+
+        def f(xt_rng, t):
+            xt, rng = xt_rng
+
+            # Predict
+            xt = self.step(xt, t, dt)
+
+            # Correct
+            for key in rng.split(corrections):
+                xt = self.correct(xt, t - dt, key)
+
+            return (xt, rng), None
+
+        x = z * self.sde.sigma(1.0)
+        (x, _), _ = jax.lax.scan(f, (x, PRNG(key)), time)
+
+        return x
+
+    @inox.jit
+    def step(self, xt: Array, t: Array, dt: Array) -> Array:
+        return xt + (self.sde.sigma(t - dt) - self.sde.sigma(t)) * self.model(xt, t)
+
+    @inox.jit
+    def correct(self, xt: Array, t: Array, key: Array) -> Array:
+        zt = self.model(xt, t)
+        eps = jax.random.normal(key, zt.shape)
+        norm = jnp.sqrt(jnp.mean(jnp.square(zt), axis=-1, keepdims=True))
+        delta = self.tau / jnp.clip(norm, a_min=1.0)
+
+        return xt - self.sde.sigma(t) * (delta * zt + jnp.sqrt(2 * delta) * eps)
+
+
+class Euler(nn.Module):
+    r"""Euler (1st order) sampler for the reverse SDE.
+
+    .. math:: x(s) = x(t) + (\sigma(s) - \sigma(t)) z(x(t), t)
+
+    Arguments:
+        model: A score/noise model :math:`z(x(t), t) \approx E[z | x(t)]`.
         sde: The forward SDE.
     """
 
@@ -82,50 +140,41 @@ class ReverseSDE(nn.Module):
         else:
             self.sde = sde
 
-    def __call__(
-        self,
-        shape: Sequence[int],
-        steps: int = 64,
-        corrections: int = 0,
-        tau: Array = 0.5,
-        key: Array = None,
-    ) -> Array:
-        tau = jnp.asarray(tau)
+    @inox.jit
+    def __call__(self, z: Array, steps: int = 64) -> Array:
+        dt = jnp.asarray(1 / steps)
+        time = jnp.linspace(1, dt, steps)
 
-        if key is None:
-            key = get_rng().split()
+        def f(xt, t):
+            return self.step(xt, t, dt), None
 
-        dt = 1 / steps
-        time = jnp.linspace(1 - dt, 0, steps)
-        keys = jax.random.split(key, (steps, corrections))
-        x = jax.random.normal(key, shape) * self.sde.sigma(1.0)
-
-        def f(x, t_keys):
-            t, keys = t_keys
-
-            x = self.predict(x, t + dt, t)
-
-            for key in keys:
-                x = self.correct(x, t, tau, key)
-
-            return x, None
-
-        x, _ = jax.lax.scan(f, x, (time, keys))
+        x = z * self.sde.sigma(1.0)
+        x, _ = jax.lax.scan(f, x, time)
 
         return x
 
     @inox.jit
-    def predict(self, x: Array, s: Array, t: Array) -> Array:
-        return x + (self.sde.sigma(t) - self.sde.sigma(s)) * self.model(x, s)
+    def step(self, xt: Array, t: Array, dt: Array) -> Array:
+        return xt + (self.sde.sigma(t - dt) - self.sde.sigma(t)) * self.model(xt, t)
+
+
+class Heun(Euler):
+    r"""Heun (2nd order) sampler for the reverse SDE.
+
+    Arguments:
+        model: A score/noise model :math:`z(x(t), t) \approx E[z | x(t)]`.
+        sde: The forward SDE.
+    """
 
     @inox.jit
-    def correct(self, x: Array, t: Array, tau: Array, key: Array) -> Array:
-        z = self.model(x, t)
-        eps = jax.random.normal(key, x.shape)
-        norm = jnp.mean(z**2, axis=-1, keepdims=True)
-        delta = tau / jnp.clip(norm, a_min=1.0)
+    def step(self, xt: Array, t: Array, dt: Array) -> Array:
+        s = t - dt
+        zt = self.model(xt, t)
+        xs = xt + (self.sde.sigma(s) - self.sde.sigma(t)) * zt
+        zs = self.model(xs, s)
+        xs = xt + (self.sde.sigma(s) - self.sde.sigma(t)) * (zt + zs) / 2
 
-        return x - self.sde.sigma(t) * (delta * z + jnp.sqrt(2 * delta) * eps)
+        return xs
 
 
 class ScoreModel(nn.Module):
