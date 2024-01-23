@@ -41,7 +41,7 @@ class VESDE(nn.Module):
 
     with
 
-    .. math:: \sigma(t) = \tan(\arctan(a) (1 - t) + \arctan(b) t)
+    .. math:: \sigma(t) = \exp(\log(a) (1 - t) + \log(b) t)
 
     Arguments:
         a: The noise lower bound.
@@ -49,8 +49,8 @@ class VESDE(nn.Module):
     """
 
     def __init__(self, a: Array = 1e-3, b: Array = 1e2):
-        self.a = jnp.arctan(a)
-        self.b = jnp.arctan(b)
+        self.a = jnp.log(a)
+        self.b = jnp.log(b)
 
     @jax.jit
     def __call__(self, x: Array, z: Array, t: Array) -> Array:
@@ -61,7 +61,7 @@ class VESDE(nn.Module):
 
     @jax.jit
     def sigma(self, t: Array) -> Array:
-        return jnp.tan(self.a + (self.b - self.a) * t)
+        return jnp.exp(self.a + (self.b - self.a) * t)
 
 
 class PredictorCorrector(nn.Module):
