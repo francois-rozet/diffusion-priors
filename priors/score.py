@@ -6,28 +6,9 @@ import jax
 import jax.numpy as jnp
 import math
 
-from inox.random import PRNG, get_rng
+from inox.random import PRNG
 from jax import Array
 from typing import *
-
-
-class NoiseEmbedding(nn.Module):
-    r"""Creates a noise embedding module.
-
-    Arguments:
-        features: The number of embedding features.
-    """
-
-    def __init__(self, features: int):
-        self.anchors = jnp.linspace(math.log(1e-4), math.log(1e3), features)
-        self.scale = jnp.square(features / (math.log(1e3) - math.log(1e-4)))
-
-    def __call__(self, sigma: Array) -> Array:
-        x = jnp.log(sigma)
-        x = -self.scale * (x - self.anchors) ** 2
-        x = jax.nn.softmax(x, axis=-1)
-
-        return x
 
 
 class VESDE(nn.Module):
@@ -48,14 +29,14 @@ class VESDE(nn.Module):
         self.a = jnp.log(a)
         self.b = jnp.log(b)
 
-    @jax.jit
+    @inox.jit
     def __call__(self, x: Array, z: Array, t: Array) -> Array:
         sigma = self.sigma(t)
         sigma = sigma[..., None]
 
         return x + sigma * z
 
-    @jax.jit
+    @inox.jit
     def sigma(self, t: Array) -> Array:
         return jnp.exp(self.a + (self.b - self.a) * t)
 
@@ -173,8 +154,28 @@ class Heun(Euler):
         return xs
 
 
+class NoiseEmbedding(nn.Module):
+    r"""Creates a noise embedding module.
+
+    Arguments:
+        features: The number of embedding features.
+    """
+
+    def __init__(self, features: int):
+        self.anchors = jnp.linspace(math.log(1e-3), math.log(1e2), features)
+        self.scale = jnp.square(features / (math.log(1e2) - math.log(1e-3)))
+
+    @inox.jit
+    def __call__(self, sigma: Array) -> Array:
+        x = jnp.log(sigma)
+        x = -self.scale * (x - self.anchors) ** 2
+        x = jax.nn.softmax(x, axis=-1)
+
+        return x
+
+
 class ScoreModel(nn.Module):
-    r"""Score model based on the EDM preconditioning.
+    r"""Score/noise model based on the EDM preconditioning.
 
     .. math:: z(x(t), t) \approx E[z | x(t)]
 
@@ -183,15 +184,11 @@ class ScoreModel(nn.Module):
         | https://arxiv.org/abs/2206.00364
 
     Arguments:
-        TODO
+        network: A noise conditional network.
+        sde: The forward SDE.
     """
 
-    def __init__(
-        self,
-        network: nn.Module,
-        emb_features: int = 64,
-        sde: VESDE = None,
-    ):
+    def __init__(self, network: nn.Module, emb_features: int = 64, sde: VESDE = None):
         self.net = network
         self.emb = NoiseEmbedding(emb_features)
 
@@ -209,10 +206,41 @@ class ScoreModel(nn.Module):
         return xt / (sigma + 1 / sigma) + 1 / denum * self.net(xt / denum, self.emb(sigma), key)
 
 
-class MeasureLoss(nn.Module):
-    r"""Measurement loss for a score/noise model.
+class DDPMLoss(nn.Module):
+    r"""DDPM loss for a score/noise model.
 
-    .. math:: \frac{1}{\sigma(t)^2} || A(x) - A((x(t) - \sigma(t) z(x(t), t))) ||^2
+    .. math:: || z - z(x(t), t)) ||^2
+
+    References:
+        | Denoising Diffusion Probabilistic Models (Ho et al., 2020)
+        | https://arxiv.org/abs/2006.11239
+
+    Arguments:
+        sde: The forward SDE.
+    """
+
+    def __init__(self, sde: VESDE = None):
+        if sde is None:
+            self.sde = VESDE()
+        else:
+            self.sde = sde
+
+    @inox.jit
+    def __call__(self, model: nn.Module, x: Array, z: Array, t: Array, key: Array = None) -> Array:
+        xt = self.sde(x, z, t)
+        error = z - model(xt, t, key)
+
+        return jnp.mean(error ** 2)
+
+
+class EDMLoss(nn.Module):
+    r"""EDM loss for a score/noise model.
+
+    .. math:: \lambda(t) || A(x) - A(x(t) - \sigma(t) z(x(t), t)) ||^2
+
+    References:
+        | Elucidating the Design Space of Diffusion-Based Generative Models (Karras et al., 2022)
+        | https://arxiv.org/abs/2206.00364
 
     Arguments:
         sde: The forward SDE.
@@ -228,17 +256,17 @@ class MeasureLoss(nn.Module):
     def __call__(self, model: nn.Module, x: Array, z: Array, t: Array, A: Callable = None, key: Array = None) -> Array:
         sigma = self.sde.sigma(t)
         sigma = sigma[..., None]
-        lmbda = 1 / sigma ** 2
+        lmbda = 1 / sigma ** 2 + 1
 
         xt = self.sde(x, z, t)
         x0 = xt - sigma * model(xt, t, key)
 
         if A is None:
-            err = x - x0
+            error = x - x0
         else:
-            err = A(x) - A(x0)
+            error = A(x) - A(x0)
 
-        return jnp.mean(lmbda * jnp.mean(err ** 2, axis=-1, keepdims=True))
+        return jnp.mean(lmbda * jnp.mean(error ** 2, axis=-1, keepdims=True))
 
 
 class StandardScoreModel(nn.Module):
@@ -269,8 +297,17 @@ class PosteriorScoreModel(nn.Module):
 
     .. math:: p(y | x) = N(y | A(x), \Sigma_y)
 
+    References:
+        | Score-based Data Assimilation (Rozet et al., 2023)
+        | https://arxiv.org/abs/2306.10574
+
     Arguments:
-        TODO
+        model: A score/noise model :math:`z(x(t), t) \approx E[z | x(t)]`.
+        A: The forward/observation model.
+        y: An observation.
+        noise: The observational noise :math:`\sigma_y`.
+        gamma: See Rozet et al. (2023).
+        sde: The forward SDE.
     """
 
     def __init__(
