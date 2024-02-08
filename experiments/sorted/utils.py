@@ -26,27 +26,22 @@ def show(x: Array, **kwargs) -> object:
     return corner(x[..., ::3], domain=DOMAIN, smooth=1, **kwargs)
 
 def make_model(
-    key: Array = None,
+    key: Array,
     hid_features: Sequence[int] = (256, 256),
     emb_features: int = 64,
     normalize: bool = True,
     **absorb,
 ) -> ScoreModel:
-    if key is None:
-        rng = inox.random.get_rng()
-    else:
-        rng = inox.random.PRNG(key)
-
-    with inox.random.set_rng(rng):
-        return ScoreModel(
-            network=TimeMLP(
-                features=10,
-                hid_features=hid_features,
-                emb_features=emb_features,
-                normalize=normalize,
-            ),
+    return ScoreModel(
+        network=TimeMLP(
+            features=10,
+            hid_features=hid_features,
             emb_features=emb_features,
-        )
+            normalize=normalize,
+            key=key,
+        ),
+        emb_features=emb_features,
+    )
 
 
 class TimeMLP(MLP):
