@@ -2,12 +2,11 @@ r"""Neural networks"""
 
 import inox
 import inox.nn as nn
-import jax
 import jax.numpy as jnp
 import math
 
 from einops import rearrange
-from inox.random import *
+from inox.random import PRNG, get_rng, set_rng
 from jax import Array
 from typing import *
 
@@ -55,17 +54,6 @@ class MLP(nn.Sequential):
         super().__init__(*layers)
 
 
-class Checkpoint(nn.Module):
-    r"""Gradient checkpointing module."""
-
-    def __init__(self, fun: nn.Module):
-        self.fun = fun
-
-    @inox.checkpoint
-    def __call__(self, *args: Any, **kwargs: Any) -> Any:
-        return self.fun(*args, **kwargs)
-
-
 class ResBlock(nn.Module):
     r"""Creates a residual block."""
 
@@ -73,34 +61,38 @@ class ResBlock(nn.Module):
         self,
         channels: int,
         emb_features: int,
-        dropout: float = 0.1,
+        dropout: float = None,
         **kwargs,
     ):
         self.project = nn.Sequential(
-            nn.Linear(emb_features, channels),
+            nn.Linear(emb_features, 2 * channels, bias=False),
             nn.Rearrange('... C -> ... 1 1 C'),
         )
 
-        self.block = nn.Sequential(
-            nn.GroupNorm(min(16, channels // 16)),
+        self.residual = nn.Sequential(
+            nn.LayerNorm(),
             nn.Conv(channels, channels, **kwargs),
             nn.SiLU(),
-            nn.TrainingDropout(dropout) if dropout > 0 else nn.Identity(),
-            nn.Linear(channels, channels),
+            nn.Identity() if dropout is None else nn.TrainingDropout(dropout),
+            nn.Conv(channels, channels, bias=False, **kwargs),
         )
 
     def __call__(self, x: Array, t: Array) -> Array:
-        y = x + self.project(t)
-        y = self.block(y)
+        ab = self.project(t)
+        a, b = jnp.array_split(ab, 2, axis=-1)
+
+        y = (a + 1) * x + b
+        y = self.residual(y)
 
         return (x + y) / math.sqrt(2)
 
 
-class SelfAttention2d(nn.MultiheadAttention):
+class SelfAttention2d(nn.Module):
     r"""Creates a 2-d self-attention layer."""
 
-    def __init__(self, channels: int, heads: int):
-        super().__init__(
+    def __init__(self, channels: int, heads: int = 1):
+        self.through = nn.Linear(channels, channels, bias=False)
+        self.attention = nn.MultiheadAttention(
             heads=heads,
             in_features=channels,
             out_features=channels,
@@ -108,59 +100,60 @@ class SelfAttention2d(nn.MultiheadAttention):
         )
 
     def __call__(self, x: Array) -> Array:
-        r""""""
-
         *_, H, W, C = x.shape
 
         x = rearrange(x, '... H W C -> ... (H W) C')
-        x = super().__call__(x)
+        x = self.through(x) + self.attention(x)
         x = rearrange(x, '... (H W) C -> ... H W C', H=H, W=W)
 
         return x
 
 
-class AttnBlock(nn.Module):
-    r"""Creates a residual attention block."""
+class AttBlock(nn.Module):
+    r"""Creates a residual self-attention block."""
 
-    def __init__(self, channels: int, heads: int = 8):
-        self.block = nn.Sequential(
-            nn.GroupNorm(min(16, channels // 16)),
-            Checkpoint(SelfAttention2d(channels, heads)),
+    def __init__(self, channels: int, heads: int = 1):
+        self.residual = nn.Sequential(
+            nn.LayerNorm(),
+            SelfAttention2d(channels, heads),
             nn.SiLU(),
-            nn.Linear(channels, channels),
+            nn.Linear(channels, channels, bias=False),
         )
 
+    @inox.checkpoint
     def __call__(self, x: Array) -> Array:
-        y = self.block(x)
+        y = self.residual(x)
 
         return (x + y) / math.sqrt(2)
 
 
 class UNet(nn.Module):
-    r"""Creates a time-conditioned U-Net."""
+    r"""Creates a time (or noise) conditional U-Net."""
 
     def __init__(
         self,
         in_channels: int,
         out_channels: int,
-        hid_channels: Sequence[int] = (128, 192, 256),
+        hid_channels: Sequence[int] = (64, 128, 256),
         hid_blocks: Sequence[int] = (3, 3, 3),
         kernel_size: Sequence[int] = (3, 3),
         emb_features: int = 64,
         attention: Container[int] = set(),
-        dropout: float = 0.1,
+        heads: int = 1,
+        dropout: float = None,
         key: Array = None,
     ):
         if key is None:
             key = get_rng().split()
 
+        stride = [2 for k in kernel_size]
         kwargs = dict(
             kernel_size=kernel_size,
             padding=[(k // 2, k // 2) for k in kernel_size]
         )
 
         with set_rng(PRNG(key)):
-            self.blocks_down, self.blocks_up = [], []
+            self.descent, self.ascent = [], []
 
             for i, blocks in enumerate(hid_blocks):
                 do, up = [], []
@@ -170,38 +163,32 @@ class UNet(nn.Module):
                     up.append(ResBlock(hid_channels[i], emb_features, dropout=dropout, **kwargs))
 
                     if i in attention:
-                        do.append(AttnBlock(hid_channels[i]))
-                        up.append(AttnBlock(hid_channels[i]))
+                        do.append(AttBlock(hid_channels[i], heads))
+                        up.append(AttBlock(hid_channels[i], heads))
 
                 if i > 0:
                     do.insert(0,
                         nn.Conv(
                             hid_channels[i - 1],
                             hid_channels[i],
-                            kernel_size=kernel_size,
-                            padding=[(k // 2, k // 2) for k in kernel_size],
-                            stride=2,
+                            bias=False,
+                            stride=stride,
+                            **kwargs,
                         )
                     )
 
                     up.append(
                         nn.Sequential(
-                            nn.GroupNorm(min(16, hid_channels[i] // 16)),
-                            nn.ConvTransposed(
-                                hid_channels[i],
-                                hid_channels[i - 1],
-                                kernel_size=kernel_size,
-                                padding=[(k // 2, k // 2 - 1) for k in kernel_size],
-                                stride=2,
-                            ),
+                            nn.Resample(factor=stride, method='nearest'),
+                            nn.Conv(hid_channels[i], hid_channels[i - 1], bias=False, **kwargs),
                         )
                     )
                 else:
                     do.insert(0, nn.Conv(in_channels, hid_channels[i], **kwargs))
                     up.append(nn.Linear(hid_channels[i], out_channels))
 
-                self.blocks_down.append(do)
-                self.blocks_up.insert(0, up)
+                self.descent.append(do)
+                self.ascent.insert(0, up)
 
     def __call__(self, x: Array, t: Array, key: Array = None) -> Array:
         if key is None:
@@ -212,7 +199,7 @@ class UNet(nn.Module):
         with set_rng(rng):
             memory = []
 
-            for blocks in self.blocks_down:
+            for blocks in self.descent:
                 for block in blocks:
                     if isinstance(block, ResBlock):
                         x = block(x, t)
@@ -221,11 +208,11 @@ class UNet(nn.Module):
 
                 memory.append(x)
 
-            for blocks in self.blocks_up:
+            for blocks in self.ascent:
                 y = memory.pop()
 
                 if x is not y:
-                    x = x + y
+                    x = (x + y) / math.sqrt(2)
 
                 for block in blocks:
                     if isinstance(block, ResBlock):

@@ -9,7 +9,7 @@ dependencies:
     - --find-links https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
     - datasets==2.16.1
     - dawgz==0.4.2
-    - inox==0.4.3
+    - inox==0.4.6
     - jax[cuda11_pip]==0.4.23
     - matplotlib==3.8.2
     - numpy==1.26.3
