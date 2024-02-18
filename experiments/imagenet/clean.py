@@ -21,8 +21,7 @@ CONFIG = {
     'hid_blocks': (3, 3, 3, 3),
     'kernel_size': (3, 3),
     'emb_features': 256,
-    'attention': {2, 3},
-    'heads': 16,
+    'heads': {3: 16},
     'dropout': 0.1,
     # Training
     'objective': 'edm',

@@ -44,8 +44,7 @@ def make_model(
     hid_blocks: Sequence[int] = (3, 3, 3),
     kernel_size: Sequence[int] = (3, 3),
     emb_features: int = 256,
-    attention: Container[int] = {2},
-    heads: int = 1,
+    heads: Dict[int, int] = {2: 1},
     dropout: float = None,
     **absorb,
 ) -> ScoreModel:
@@ -57,7 +56,6 @@ def make_model(
             hid_blocks=hid_blocks,
             kernel_size=kernel_size,
             emb_features=emb_features,
-            attention=attention,
             heads=heads,
             dropout=dropout,
             key=key,
