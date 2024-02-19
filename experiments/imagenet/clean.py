@@ -82,13 +82,13 @@ def train():
 
     # EMA
     ema = EMA(decay=config.ema_decay)
-    avg = params
+    avrg = params
 
     # Training
-    avg, params, others, opt_state = jax.device_put((avg, params, others, opt_state), replicated)
+    avrg, params, others, opt_state = jax.device_put((avrg, params, others, opt_state), replicated)
 
     @jax.jit
-    def sgd_step(avg, params, others, opt_state, x, key):
+    def sgd_step(avrg, params, others, opt_state, x, key):
         keys = jax.random.split(key, 3)
 
         z = jax.random.normal(keys[0], shape=x.shape)
@@ -100,9 +100,9 @@ def train():
         loss, grads = jax.value_and_grad(ell)(params)
         updates, opt_state = optimizer.update(grads, opt_state, params)
         params = optax.apply_updates(params, updates)
-        avg = ema(avg, params)
+        avrg = ema(avrg, params)
 
-        return loss, avg, params, opt_state
+        return loss, avrg, params, opt_state
 
     for epoch in (bar := trange(config.epochs + 1, ncols=88)):
         loader = (
@@ -114,22 +114,21 @@ def train():
 
         losses = []
 
-        for x in prefetch(map(transform, loader)):
+        for x in prefetch(map(collate, loader)):
             x = jax.device_put(x, distributed)
-            loss, avg, params, opt_state = sgd_step(avg, params, others, opt_state, x, key=rng.split())
+            loss, avrg, params, opt_state = sgd_step(avrg, params, others, opt_state, x, key=rng.split())
             losses.append(loss)
 
         losses = np.stack(losses)
 
         bar.set_postfix(loss=losses.mean(), loss_std=losses.std())
 
-        ## Checkpoint
-        model = static(avg, others)
+        ## Eval
+        model = static(avrg, others)
         model.train(False)
 
         dump_module(model, runpath / 'checkpoint.pkl')
 
-        ## Eval
         sampler = Euler(model)
 
         x = sampler(latent, steps=256)

@@ -23,7 +23,7 @@ else:
 PATH.mkdir(parents=True, exist_ok=True)
 
 
-def transform(batch: Dict) -> Array:
+def collate(batch: Dict) -> Array:
     img = batch['img']
 
     if isinstance(img, list):

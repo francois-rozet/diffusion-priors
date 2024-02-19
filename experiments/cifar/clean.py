@@ -74,7 +74,7 @@ def train():
     opt_state = optimizer.init(params)
 
     # EMA
-    avg = params
+    avrg = params
 
     if config.ema_decay is None:
         ema = lambda x, y: y
@@ -92,13 +92,13 @@ def train():
         return objective(static(params, others), x, z, t, key=keys[2])
 
     @jax.jit
-    def sgd_step(avg, params, others, opt_state, x, key):
+    def sgd_step(avrg, params, others, opt_state, x, key):
         loss, grads = jax.value_and_grad(ell)(params, others, x, key)
         updates, opt_state = optimizer.update(grads, opt_state, params)
         params = optax.apply_updates(params, updates)
-        avg = ema(avg, params)
+        avrg = ema(avrg, params)
 
-        return loss, avg, params, opt_state
+        return loss, avrg, params, opt_state
 
     for epoch in (bar := trange(config.epochs + 1, ncols=88)):
         loader = (
@@ -109,8 +109,8 @@ def train():
 
         losses = []
 
-        for x in map(transform, loader):
-            loss, avg, params, opt_state = sgd_step(avg, params, others, opt_state, x, key=rng.split())
+        for x in map(collate, loader):
+            loss, avrg, params, opt_state = sgd_step(avrg, params, others, opt_state, x, key=rng.split())
             losses.append(loss)
 
         loss_train = np.stack(losses).mean()
@@ -123,7 +123,7 @@ def train():
 
         losses = []
 
-        for x in map(transform, loader):
+        for x in map(collate, loader):
             loss = ell(params, others, x, key=rng.split())
             losses.append(loss)
 
@@ -131,15 +131,13 @@ def train():
 
         bar.set_postfix(loss=loss_train, loss_val=loss_val)
 
-        ## Checkpoint
-        model = static(avg, others)
-        model.train(False)
-
-        if epoch % 64 == 0:
-            dump_module(model, runpath / 'checkpoint.pkl')
-
         ## Eval
         if epoch % 64 == 0:
+            model = static(avrg, others)
+            model.train(False)
+
+            dump_module(model, runpath / 'checkpoint.pkl')
+
             sampler = Euler(model)
 
             x = sampler(latent, steps=256)
@@ -162,7 +160,7 @@ def train():
 if __name__ == '__main__':
     schedule(
         train,
-        name='Clean training',
+        name='Training from clean data',
         backend='slurm',
         export='ALL',
         env=['export WANDB_SILENT=true'],

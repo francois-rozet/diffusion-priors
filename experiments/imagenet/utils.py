@@ -35,7 +35,7 @@ def resize(image: Image, res: int = 64) -> Image:
     return Image.fromarray(np.asarray(image))
 
 
-def transform(batch: Dict) -> Array:
+def collate(batch: Dict) -> Array:
     img = batch['image']
 
     if isinstance(img, list):
