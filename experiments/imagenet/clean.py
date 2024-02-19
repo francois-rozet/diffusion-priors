@@ -48,14 +48,17 @@ def train():
 
     # Sharding
     jax.config.update('jax_threefry_partitionable', True)
+
     sharding = jax.sharding.PositionalSharding(jax.devices())
+    replicated = sharding.replicate()
+    distributed = sharding.reshape(-1, 1)
 
     # RNG
     seed = hash(runpath) % 2**16
     rng = inox.random.PRNG(seed)
 
-    latent = rng.normal((4, 4, 64 * 64 * 3))
-    latent = jax.device_put(latent, sharding.reshape(-1, 1, 1))
+    latent = rng.normal((16, 64 * 64 * 3))
+    latent = jax.device_put(latent, distributed)
 
     # Data
     dataset = load_from_disk(PATH / 'hf/imagenet-64')['train']
@@ -82,7 +85,7 @@ def train():
     avg = params
 
     # Training
-    avg, params, others, opt_state = jax.device_put((avg, params, others, opt_state), sharding.replicate())
+    avg, params, others, opt_state = jax.device_put((avg, params, others, opt_state), replicated)
 
     @jax.jit
     def sgd_step(avg, params, others, opt_state, x, key):
@@ -112,7 +115,7 @@ def train():
         losses = []
 
         for x in prefetch(map(transform, loader)):
-            x = jax.device_put(x, sharding.reshape(-1, 1))
+            x = jax.device_put(x, distributed)
             loss, avg, params, opt_state = sgd_step(avg, params, others, opt_state, x, key=rng.split())
             losses.append(loss)
 
@@ -130,6 +133,7 @@ def train():
         sampler = Euler(model)
 
         x = sampler(latent, steps=256)
+        x = x.reshape(4, 4, -1)
         x = unflatten(x, 64, 64)
 
         run.log({
