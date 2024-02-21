@@ -18,7 +18,6 @@ def unflatten(x: Array, height: int, width: int) -> Array:
 
 def from_pil(img: Image) -> Array:
     x = np.asarray(img)
-    x = x + np.random.uniform(size=x.shape)
     x = x * (4 / 256) - 2
 
     return x
