@@ -24,12 +24,12 @@ CONFIG = {
     'heads': {2: 4},
     'dropout': 0.1,
     # Data
-    'duplicate': 1,
+    'duplicate': 4,
     # Training
-    'laps': 7,
-    'epochs': 1024,
+    'laps': 4,
+    'epochs': 256,
     'batch_size': 256,
-    'scheduler': 'linear',
+    'scheduler': 'constant',
     'lr_init': 2e-4,
     'lr_end': 1e-6,
     'lr_warmup': 0.0,
@@ -43,7 +43,7 @@ CONFIG = {
 def measure(A, x):
     return flatten(A * unflatten(x, 32, 32))
 
-def sample(model, A, y, key):
+def sample(model, y, A, key):
     sampler = Euler(
         PosteriorScoreModel(
             model=model,
@@ -63,10 +63,8 @@ def sample(model, A, y, key):
 
 def generate(model, dataset, rng, batch_size):
     def transform(batch):
-        A = batch['A']
-        y = batch['y']
-
-        x = sample(model, A, y, rng.split())
+        y, A = batch['y'], batch['A']
+        x = sample(model, y, A, rng.split())
 
         return {'x': x, 'A': A}
 
@@ -100,11 +98,13 @@ def train():
 
     # Data
     dataset = load_from_disk(PATH / 'hf/cifar-mask')
-    dataset = dataset['train']
-    dataset = concatenate_datasets([dataset] * config.duplicate)
     dataset.set_format('numpy')
 
-    A_eval, y_eval = dataset[:16]['A'], dataset[:16]['y']
+    trainset_yA = dataset['train']
+    trainset_yA = concatenate_datasets([trainset_yA] * config.duplicate)
+
+    testset_yA = dataset['test']
+    y_eval, A_eval = testset_yA[:16]['y'], testset_yA[:16]['A']
 
     # Model
     model = make_model(key=rng.split(), **config)
@@ -117,7 +117,7 @@ def train():
     objective = EDMLoss()
 
     # Optimizer
-    steps = config.epochs * len(dataset) // config.batch_size
+    steps = config.epochs * len(trainset_yA) // config.batch_size
     optimizer = Adam(steps=steps, **config)
     opt_state = optimizer.init(params)
 
@@ -146,13 +146,15 @@ def train():
 
     for lap in range(config.laps):
         if lap > 0:
-            trainset = generate(model, dataset, rng, config.batch_size)
+            trainset_xA = generate(model, trainset_yA, rng, config.batch_size)
+            testset_xA = generate(model, testset_yA, rng, config.batch_size)
         else:
-            trainset = generate(StandardScoreModel(), dataset, rng, config.batch_size)
+            trainset_xA = generate(StandardScoreModel(), trainset_yA, rng, config.batch_size)
+            testset_xA = generate(StandardScoreModel(), testset_yA, rng, config.batch_size)
 
-        for epoch in (bar := trange(config.epochs + 1, ncols=88)):
+        for epoch in (bar := trange(config.epochs, ncols=88)):
             loader = (
-                trainset
+                trainset_xA
                 .shuffle(seed=seed + lap * config.epochs + epoch)
                 .iter(batch_size=config.batch_size, drop_last_batch=True)
             )
@@ -168,23 +170,42 @@ def train():
 
             loss_train = np.stack(losses).mean()
 
-            bar.set_postfix(loss=loss_train)
+            ## Validation
+            loader = (
+                testset_xA
+                .iter(batch_size=config.batch_size, drop_last_batch=True)
+            )
+
+            losses = []
+
+            for batch in loader:
+                x, A = batch['x'], batch['A']
+                x = flatten(x)
+
+                loss = ell(params, others, x, A, key=rng.split())
+                losses.append(loss)
+
+            loss_val = np.stack(losses).mean()
+
+            bar.set_postfix(loss=loss_train, loss_val=loss_val)
 
             ## Eval
-            if epoch % 64 == 0:
+            if (epoch + 1) % 16 == 0:
                 model = static(avrg, others)
                 model.train(False)
 
-                x = sample(model, A_eval, y_eval, rng.split())
+                x = sample(model, y_eval, A_eval, rng.split())
                 x = x.reshape(4, 4, 32, 32, 3)
 
                 run.log({
                     'loss': loss_train,
+                    'loss_val': loss_val,
                     'samples': wandb.Image(to_pil(x, zoom=2)),
                 })
             else:
                 run.log({
                     'loss': loss_train,
+                    'loss_val': loss_val,
                 })
 
         ## Checkpoint
