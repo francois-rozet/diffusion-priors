@@ -17,16 +17,16 @@ from utils import *
 
 CONFIG = {
     # Architecture
-    'hid_channels': (128, 256, 384, 512),
-    'hid_blocks': (3, 3, 3, 3),
+    'hid_channels': (64, 128, 256, 512),
+    'hid_blocks': (2, 3, 5, 7),
     'kernel_size': (3, 3),
     'emb_features': 256,
     'heads': {3: 16},
     'dropout': 0.1,
     # Training
     'laps': 8,
-    'epochs': 256,
-    'batch_size': 512,
+    'epochs': 64,
+    'batch_size': 1024,
     'scheduler': 'constant',
     'lr_init': 2e-4,
     'lr_end': 1e-6,
@@ -62,10 +62,10 @@ def sample(model, y, A, key):
 def generate(model, dataset, rng, batch_size, sharding=None):
     def transform(batch):
         y, A = batch['y'], batch['A']
-        y, A = jax.device_put((y, A), sharding)
-        x = sample(model, y, A, rng.split())
+        y, B = jax.device_put((y, A), sharding)
+        x = sample(model, y, B, rng.split())
 
-        return {'x': x}
+        return {'x': x, 'A': A}
 
     types = {
         'x': Array3D(shape=(64, 64, 3), dtype='float32'),
@@ -76,13 +76,14 @@ def generate(model, dataset, rng, batch_size, sharding=None):
         transform,
         remove_columns=['y'],
         features=Features(types),
+        keep_in_memory=True,
         batched=True,
         batch_size=batch_size,
         drop_last_batch=True,
     )
 
 
-@job(cpus=4, gpus=4, ram='64GB', time='14-00:00:00', partition='a5000,quadro,tesla')
+@job(cpus=4, gpus=4, ram='192GB', time='14-00:00:00', partition='a5000,quadro,tesla')
 def train():
     run = wandb.init(project='priors-imagenet-patch', dir=PATH, config=CONFIG)
     runpath = PATH / f'runs/{run.name}_{run.id}'
@@ -156,16 +157,13 @@ def train():
         for epoch in (bar := trange(config.epochs, ncols=88)):
             loader = (
                 trainset
-                .with_format(None)
-                .to_iterable_dataset()
-                .with_format('numpy')
-                .shuffle(seed=seed + lap * config.epochs + epoch, buffer_size=16384)
+                .shuffle(seed=seed + lap * config.epochs + epoch)
                 .iter(batch_size=config.batch_size, drop_last_batch=True)
             )
 
             losses = []
 
-            for batch in loader:
+            for batch in prefetch(loader):
                 x, A = batch['x'], batch['A']
                 x, A = jax.device_put((x, A), distributed)
                 x = flatten(x)
@@ -201,7 +199,7 @@ def train():
         dump_module(model, runpath / f'checkpoint_{lap}.pkl')
 
         ## Refresh
-        if lap > 0:
+        if lap > 1:
             params = avrg
         else:
             params = avrg = start

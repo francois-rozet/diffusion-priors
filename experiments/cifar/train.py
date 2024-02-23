@@ -18,7 +18,7 @@ from utils import *
 CONFIG = {
     # Architecture
     'hid_channels': (128, 256, 384),
-    'hid_blocks': (3, 3, 3),
+    'hid_blocks': (2, 3, 5),
     'kernel_size': (3, 3),
     'emb_features': 256,
     'heads': {2: 4},
@@ -26,8 +26,8 @@ CONFIG = {
     # Data
     'duplicate': 4,
     # Training
-    'laps': 4,
-    'epochs': 256,
+    'laps': 8,
+    'epochs': 64,
     'batch_size': 256,
     'scheduler': 'constant',
     'lr_init': 2e-4,
@@ -84,7 +84,7 @@ def generate(model, dataset, rng, batch_size):
     )
 
 
-@job(cpus=4, gpus=1, ram='16GB', time='7-00:00:00', partition='a5000,quadro,tesla')
+@job(cpus=4, gpus=1, ram='48GB', time='14-00:00:00', partition='a5000,quadro,tesla')
 def train():
     run = wandb.init(project='priors-cifar-mask', dir=PATH, config=CONFIG)
     runpath = PATH / f'runs/{run.name}_{run.id}'
@@ -161,7 +161,7 @@ def train():
 
             losses = []
 
-            for batch in loader:
+            for batch in prefetch(loader):
                 x, A = batch['x'], batch['A']
                 x = flatten(x)
 
@@ -178,7 +178,7 @@ def train():
 
             losses = []
 
-            for batch in loader:
+            for batch in prefetch(loader):
                 x, A = batch['x'], batch['A']
                 x = flatten(x)
 
@@ -190,7 +190,7 @@ def train():
             bar.set_postfix(loss=loss_train, loss_val=loss_val)
 
             ## Eval
-            if (epoch + 1) % 16 == 0:
+            if (epoch + 1) % 4 == 0:
                 model = static(avrg, others)
                 model.train(False)
 
@@ -215,7 +215,7 @@ def train():
         dump_module(model, runpath / f'checkpoint_{lap}.pkl')
 
         ## Refresh
-        if lap > 0:
+        if lap > 1:
             params = avrg
         else:
             params = avrg = start
