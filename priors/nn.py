@@ -29,7 +29,7 @@ class MLP(nn.Sequential):
         in_features: int,
         out_features: int,
         hid_features: Sequence[int] = (64, 64),
-        activation: Callable[[], nn.Module] = nn.ReLU,
+        activation: Callable[[], nn.Module] = nn.SiLU,
         normalize: bool = False,
         key: Array = None,
     ):

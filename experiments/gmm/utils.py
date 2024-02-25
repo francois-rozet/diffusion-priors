@@ -1,40 +1,42 @@
-r"""Sorted experiment helpers"""
+r"""GMM experiment helpers"""
 
-import inox
-import inox.nn as nn
-import jax
 import jax.numpy as jnp
-import optax
+import matplotlib.pyplot as plt
 
 from functools import partial
-from inox.random import PRNG
 from jax import Array
+from PIL import Image
 from typing import *
 
 from priors.nn import *
 from priors.score import *
-from priors.plots import corner
 
 
-DOMAIN = -3.0 * jnp.ones(10), 3.0 * jnp.ones(10)
+def show(x: Array, zoom: int = 4, **kwargs) -> Image:
+    kwargs.setdefault('bins', 64)
+    kwargs.setdefault('density', True)
+    kwargs.setdefault('range', ((-3.0, 3.0), (-3.0, 3.0)))
 
+    hist, _, _ = np.histogram2d(x[:, 0], x[:, 1], **kwargs)
+    hist = plt.cm.ScalarMappable().to_rgba(hist, bytes=True)
+    hist = Image.fromarray(hist)
 
-def generate(n: int, key: Array = None) -> Array:
-    return jnp.sort(jax.random.normal(key, shape=(n, 10)), axis=-1)
+    if zoom > 1:
+        hist = hist.resize((hist.height * zoom, hist.width * zoom), Image.NEAREST)
 
-def show(x: Array, **kwargs) -> object:
-    return corner(x[..., ::3], domain=DOMAIN, smooth=1, **kwargs)
+    return hist
+
 
 def make_model(
     key: Array,
-    hid_features: Sequence[int] = (256, 256),
-    emb_features: int = 64,
+    hid_features: Sequence[int] = (256, 256, 256),
+    emb_features: int = 256,
     normalize: bool = True,
     **absorb,
 ) -> ScoreModel:
     return ScoreModel(
         network=TimeMLP(
-            features=10,
+            features=5,
             hid_features=hid_features,
             emb_features=emb_features,
             normalize=normalize,
