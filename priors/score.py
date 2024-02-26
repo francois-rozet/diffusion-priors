@@ -6,7 +6,6 @@ import jax
 import jax.numpy as jnp
 import math
 
-from inox.random import PRNG
 from jax import Array
 from typing import *
 
@@ -47,6 +46,7 @@ class PredictorCorrector(nn.Module):
     Arguments:
         model: A score/noise model :math:`z(x(t), t) \approx E[z | x(t)]`.
         sde: The forward SDE.
+        tau: The Langevin Monte Carlo step size.
     """
 
     def __init__(self, model: nn.Module, sde: VESDE = None, tau: Array = 1e-2):
@@ -62,39 +62,39 @@ class PredictorCorrector(nn.Module):
         self.tau = jnp.asarray(tau)
 
     @inox.jit
-    def __call__(self, z: Array, key: Array, steps: int = 64, corrections: int = 1) -> Array:
-        dt = jnp.asarray(1 / steps)
-        time = jnp.linspace(1, dt, steps)
+    def __call__(self, z: Array, t: Array = 1.0, steps: int = 64, corrections: int = 1, key: Array = None) -> Array:
+        dt = jnp.asarray(t / steps)
+        time = jnp.linspace(t, dt, steps)
+        keys = jax.random.split(key, steps)
 
-        def f(xt_rng, t):
-            xt, rng = xt_rng
+        def f(xt, t_key):
+            t, key = t_key
+            s = t - dt
 
-            # Predict
-            xt = self.step(xt, t, dt)
+            xs = self.predict(xt, t, s)
 
-            # Correct
-            for key in rng.split(corrections):
-                xt = self.correct(xt, t - dt, key)
+            for key in jax.random.split(key, corrections):
+                xs = self.correct(xs, s, key)
 
-            return (xt, rng), None
+            return xs, None
 
-        x = z * self.sde.sigma(1.0)
-        (x, _), _ = jax.lax.scan(f, (x, PRNG(key)), time)
+        x = z * self.sde.sigma(t)
+        x, _ = jax.lax.scan(f, x, (time, keys))
 
         return x
 
     @inox.jit
-    def step(self, xt: Array, t: Array, dt: Array) -> Array:
-        return xt + (self.sde.sigma(t - dt) - self.sde.sigma(t)) * self.model(xt, t)
+    def predict(self, xt: Array, t: Array, s: Array) -> Array:
+        return xt + (self.sde.sigma(s) - self.sde.sigma(t)) * self.model(xt, t)
 
     @inox.jit
     def correct(self, xt: Array, t: Array, key: Array) -> Array:
         zt = self.model(xt, t)
         eps = jax.random.normal(key, zt.shape)
-        norm = jnp.sqrt(jnp.mean(jnp.square(zt), axis=-1, keepdims=True))
-        delta = self.tau / jnp.clip(norm, a_min=1.0)
+        norm = jnp.sqrt(jnp.mean(zt ** 2, axis=-1, keepdims=True))
+        tau = self.tau / jnp.clip(norm, a_min=1.0)
 
-        return xt - self.sde.sigma(t) * (delta * zt + jnp.sqrt(2 * delta) * eps)
+        return xt - self.sde.sigma(t) * (tau * zt + jnp.sqrt(2 * tau) * eps)
 
 
 class Euler(nn.Module):
@@ -118,21 +118,21 @@ class Euler(nn.Module):
             self.sde = sde
 
     @inox.jit
-    def __call__(self, z: Array, steps: int = 64) -> Array:
-        dt = jnp.asarray(1 / steps)
-        time = jnp.linspace(1, dt, steps)
+    def __call__(self, z: Array, t: Array = 1.0, steps: int = 64) -> Array:
+        dt = jnp.asarray(t / steps)
+        time = jnp.linspace(t, dt, steps)
 
         def f(xt, t):
-            return self.step(xt, t, dt), None
+            return self.step(xt, t, t - dt), None
 
-        x = z * self.sde.sigma(1.0)
+        x = z * self.sde.sigma(t)
         x, _ = jax.lax.scan(f, x, time)
 
         return x
 
     @inox.jit
-    def step(self, xt: Array, t: Array, dt: Array) -> Array:
-        return xt + (self.sde.sigma(t - dt) - self.sde.sigma(t)) * self.model(xt, t)
+    def step(self, xt: Array, t: Array, s: Array) -> Array:
+        return xt + (self.sde.sigma(s) - self.sde.sigma(t)) * self.model(xt, t)
 
 
 class Heun(Euler):
@@ -144,8 +144,7 @@ class Heun(Euler):
     """
 
     @inox.jit
-    def step(self, xt: Array, t: Array, dt: Array) -> Array:
-        s = t - dt
+    def step(self, xt: Array, t: Array, s: Array) -> Array:
         zt = self.model(xt, t)
         xs = xt + (self.sde.sigma(s) - self.sde.sigma(t)) * zt
         zs = self.model(xs, s)
@@ -209,7 +208,7 @@ class ScoreModel(nn.Module):
 class DDPMLoss(nn.Module):
     r"""DDPM loss for a score/noise model.
 
-    .. math:: || z - z(x(t), t)) ||^2
+    .. math:: || A(z - z(x(t), t)) ||^2
 
     References:
         | Denoising Diffusion Probabilistic Models (Ho et al., 2020)
@@ -226,9 +225,15 @@ class DDPMLoss(nn.Module):
             self.sde = sde
 
     @inox.jit
-    def __call__(self, model: nn.Module, x: Array, z: Array, t: Array, key: Array = None) -> Array:
+    def __call__(self, model: nn.Module, x: Array, z: Array, t: Array, A: Callable = None, key: Array = None) -> Array:
         xt = self.sde(x, z, t)
-        error = z - model(xt, t, key)
+
+        if A is None:
+            A = lambda x: x
+        else:
+            _, A = jax.linearize(A, x)
+
+        error = A(z - model(xt, t, key))
 
         return jnp.mean(error ** 2)
 
@@ -236,7 +241,7 @@ class DDPMLoss(nn.Module):
 class EDMLoss(nn.Module):
     r"""EDM loss for a score/noise model.
 
-    .. math:: \lambda(t) || A(x) - A(x(t) - \sigma(t) z(x(t), t)) ||^2
+    .. math:: \lambda(t) || A(x - x(t) + \sigma(t) z(x(t), t)) ||^2
 
     References:
         | Elucidating the Design Space of Diffusion-Based Generative Models (Karras et al., 2022)
@@ -262,9 +267,11 @@ class EDMLoss(nn.Module):
         x0 = xt - sigma * model(xt, t, key)
 
         if A is None:
-            error = x - x0
+            A = lambda x: x
         else:
-            error = A(x) - A(x0)
+            _, A = jax.linearize(A, x)
+
+        error = A(x - x0)
 
         return jnp.mean(lmbda * jnp.mean(error ** 2, axis=-1, keepdims=True))
 
@@ -272,7 +279,7 @@ class EDMLoss(nn.Module):
 class StandardScoreModel(nn.Module):
     r"""Score model for a standard Gaussian random variable.
 
-    .. math:: z(x(t), t) = \sigma(t) x(t) / (\sigma(t)^2 + 1)
+    .. math:: z(x(t), t) = \frac{\sigma(t) x(t)}{\sigma(t)^2 + 1}
 
     Arguments:
         sde: The forward SDE.
@@ -297,16 +304,12 @@ class PosteriorScoreModel(nn.Module):
 
     .. math:: p(y | x) = N(y | A(x), \Sigma_y)
 
-    References:
-        | Score-based Data Assimilation (Rozet et al., 2023)
-        | https://arxiv.org/abs/2306.10574
-
     Arguments:
         model: A score/noise model :math:`z(x(t), t) \approx E[z | x(t)]`.
-        A: The forward/observation model.
+        A: The forward model :math:`\mathcal{A}`.
         y: An observation.
-        noise: The observational noise :math:`\sigma_y`.
-        gamma: See Rozet et al. (2023).
+        sigma_y: The observed standard deviation :math:`\sigma_y`.
+        sigma_x: The hidden standard deviation :math:`\sigma_x`.
         sde: The forward SDE.
     """
 
@@ -315,39 +318,51 @@ class PosteriorScoreModel(nn.Module):
         model: nn.Module,
         A: Callable[[Array], Array],
         y: Array,
-        noise: Union[float, Array],
-        gamma: Union[float, Array] = 1.0,
+        sigma_y: Union[float, Array],
+        sigma_x: Union[float, Array] = 1.0,
         sde: VESDE = None,
+        rtol: float = 1e-5,
+        maxiter: int = None,
     ):
         super().__init__()
 
         self.model = model
         self.A = A
         self.y = jnp.asarray(y)
-        self.noise = jnp.asarray(noise)
-        self.gamma = jnp.asarray(gamma)
+        self.sigma_y = jnp.asarray(sigma_y)
+        self.sigma_x = jnp.asarray(sigma_x)
 
         if sde is None:
             self.sde = VESDE()
         else:
             self.sde = sde
 
+        self.rtol = rtol
+        self.maxiter = maxiter
+
     @inox.jit
     def __call__(self, xt: Array, t: Array) -> Array:
         sigma = self.sde.sigma(t)
         sigma = sigma[..., None]
 
-        def log_prob(xt):
+        var_y = self.sigma_y ** 2
+        var_x = self.sigma_x ** 2 * sigma ** 2 / (self.sigma_x ** 2 + sigma ** 2)
+
+        def denoise(xt):
             z = self.model(xt, t)
             x = xt - sigma * z
+            return x, z
 
-            err = (self.y - self.A(x)) ** 2
-            var = self.noise ** 2 + self.gamma * sigma ** 2
+        x, vjp, z = jax.vjp(denoise, xt, has_aux=True)
+        y, A = jax.linearize(self.A, x)
+        At = jax.linear_transpose(self.A, x)
 
-            log_p = -jnp.sum(err / var) / 2
+        def cov(y):
+            return var_y * y + A(var_x * next(iter(At(y))))
 
-            return log_p, z
+        error = self.y - y
+        error, _ = jax.scipy.sparse.linalg.cg(cov, error, tol=self.rtol, maxiter=self.maxiter)
+        error, = At(error)
+        score, = vjp(error)
 
-        s, z = jax.grad(log_prob, has_aux=True)(xt)
-
-        return z - sigma * s
+        return z - sigma * score
