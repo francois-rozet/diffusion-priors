@@ -17,18 +17,18 @@ from utils import *
 
 CONFIG = {
     # Architecture
-    'hid_channels': (64, 128, 256, 512),
+    'hid_channels': (128, 256, 384, 512),
     'hid_blocks': (2, 3, 5, 7),
     'kernel_size': (3, 3),
     'emb_features': 256,
     'heads': {3: 16},
     'dropout': 0.1,
     # Training
-    'laps': 8,
+    'laps': 4,
     'epochs': 64,
-    'batch_size': 1024,
+    'batch_size': 512,
     'scheduler': 'constant',
-    'lr_init': 2e-4,
+    'lr_init': 1e-4,
     'lr_end': 1e-6,
     'lr_warmup': 0.0,
     'optimizer': 'adam',
@@ -47,8 +47,7 @@ def sample(model, y, A, key):
             model=model,
             A=inox.Partial(measure, A),
             y=flatten(y),
-            noise=1e-3,
-            gamma=1e-1,
+            sigma_y=1e-3,
         ),
     )
 
@@ -150,6 +149,7 @@ def train():
 
     for lap in range(config.laps):
         if lap > 0:
+            del trainset
             trainset = generate(model, dataset, rng, config.batch_size, distributed)
         else:
             trainset = generate(StandardScoreModel(), dataset, rng, config.batch_size)
@@ -176,21 +176,16 @@ def train():
             bar.set_postfix(loss=loss_train)
 
             ## Eval
-            if (epoch + 1) % 4 == 0:
-                model = static(avrg, others)
-                model.train(False)
+            model = static(avrg, others)
+            model.train(False)
 
-                x = sample(model, y_eval, A_eval, rng.split())
-                x = x.reshape(4, 4, 64, 64, 3)
+            x = sample(model, y_eval, A_eval, rng.split())
+            x = x.reshape(4, 4, 64, 64, 3)
 
-                run.log({
-                    'loss': loss_train,
-                    'samples': wandb.Image(to_pil(x)),
-                })
-            else:
-                run.log({
-                    'loss': loss_train,
-                })
+            run.log({
+                'loss': loss_train,
+                'samples': wandb.Image(to_pil(x)),
+            })
 
         ## Checkpoint
         model = static(avrg, others)

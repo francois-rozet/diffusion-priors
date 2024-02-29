@@ -49,8 +49,7 @@ def sample(model, y, A, key):
             model=model,
             A=inox.Partial(measure, A),
             y=flatten(y),
-            noise=1e-3,
-            gamma=1e-1,
+            sigma_y=1e-3,
         ),
     )
 

@@ -27,7 +27,7 @@ def downsample():
 
 
 @after(downsample)
-@job(cpus=16, ram='192GB', time='1-00:00:00')
+@job(cpus=16, ram='256GB', time='1-00:00:00')
 def corrupt():
     def transform(row):
         x = from_pil(row['image'])
@@ -52,16 +52,15 @@ def corrupt():
 
     dataset = load_from_disk(PATH / 'hf/imagenet-64')
     dataset = dataset['train']
-    dataset = dataset.select(range(2**18))
+    dataset = dataset.select(range(2**20))
     dataset = dataset.map(
         transform,
         features=Features(types),
         remove_columns=['image', 'label'],
-        keep_in_memory=True,
         num_proc=16,
     )
 
-    dataset.save_to_disk(PATH / 'hf/imagenet-patch')
+    dataset.save_to_disk(PATH / 'hf/imagenet-patch', max_shard_size='1GB')
 
 
 if __name__ == '__main__':
