@@ -16,6 +16,7 @@ def download():
 def corrupt():
     def transform(row):
         x = from_pil(row['img'])
+        x = x + 4 / 256 * np.random.uniform(size=x.shape)  # dequantize
         A = np.random.uniform(size=(32, 32, 1)) < 0.25
         y = np.random.normal(loc=A * x, scale=1e-3)
 

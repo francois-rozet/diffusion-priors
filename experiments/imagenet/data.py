@@ -31,6 +31,7 @@ def downsample():
 def corrupt():
     def transform(row):
         x = from_pil(row['image'])
+        x = x + 4 / 256 * np.random.uniform(size=x.shape)  # dequantize
 
         A = np.ones(shape=(64, 64, 1), dtype=bool)
 
