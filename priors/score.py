@@ -321,7 +321,7 @@ class PosteriorScoreModel(nn.Module):
         sigma_y: Union[float, Array],
         sigma_x: Union[float, Array] = 1.0,
         sde: VESDE = None,
-        rtol: float = 1e-5,
+        rtol: float = 1e-3,
         maxiter: int = None,
     ):
         super().__init__()
