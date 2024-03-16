@@ -35,17 +35,6 @@ def resize(image: Image, res: int = 64) -> Image:
     return Image.fromarray(np.asarray(image))
 
 
-def collate(batch: Dict) -> Array:
-    img = batch['image']
-
-    if isinstance(img, list):
-        x = np.stack(list(map(from_pil, img)))
-    else:
-        x = from_pil(img)
-
-    return flatten(x)
-
-
 def show(x: Array, zoom: int = 1) -> Image:
     return to_pil(unflatten(x, 64, 64), zoom=zoom)
 
@@ -59,8 +48,8 @@ def make_model(
     heads: Dict[int, int] = {2: 1},
     dropout: float = None,
     **absorb,
-) -> ScoreModel:
-    return ScoreModel(
+) -> Denoiser:
+    return Denoiser(
         network=FlatUNet(
             in_channels=3,
             out_channels=3,

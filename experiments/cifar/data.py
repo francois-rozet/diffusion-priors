@@ -6,13 +6,13 @@ from dawgz import job, after, schedule
 from utils import *
 
 
-@job(cpus=4, ram='16GB', time='06:00:00')
+@job(cpus=4, ram='64GB', time='06:00:00')
 def download():
     load_dataset('cifar10', cache_dir=PATH / 'hf')
 
 
 @after(download)
-@job(cpus=4, ram='16GB', time='06:00:00')
+@job(cpus=4, ram='64GB', time='06:00:00')
 def corrupt():
     def transform(row):
         x = from_pil(row['img'])

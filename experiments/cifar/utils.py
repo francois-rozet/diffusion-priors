@@ -23,17 +23,6 @@ else:
 PATH.mkdir(parents=True, exist_ok=True)
 
 
-def collate(batch: Dict) -> Array:
-    img = batch['img']
-
-    if isinstance(img, list):
-        x = np.stack(list(map(from_pil, img)))
-    else:
-        x = from_pil(img)
-
-    return flatten(x)
-
-
 def show(x: Array, zoom: int = 4) -> Image:
     return to_pil(unflatten(x, 32, 32), zoom=zoom)
 
@@ -47,8 +36,8 @@ def make_model(
     heads: Dict[int, int] = {2: 1},
     dropout: float = None,
     **absorb,
-) -> ScoreModel:
-    return ScoreModel(
+) -> Denoiser:
+    return Denoiser(
         network=FlatUNet(
             in_channels=3,
             out_channels=3,

@@ -23,11 +23,13 @@ def downsample():
 
     dataset = load_dataset('imagenet-1k', cache_dir=PATH / 'hf', trust_remote_code=True)
     dataset = dataset.map(transform, num_proc=16)
+
     dataset.save_to_disk(PATH / 'hf/imagenet-64')
+    dataset.cleanup_cache_files()
 
 
 @after(downsample)
-@job(cpus=16, ram='256GB', time='1-00:00:00')
+@job(cpus=16, ram='64GB', time='1-00:00:00')
 def corrupt():
     def transform(row):
         x = from_pil(row['image'])
@@ -60,7 +62,8 @@ def corrupt():
         num_proc=16,
     )
 
-    dataset.save_to_disk(PATH / 'hf/imagenet-patch', max_shard_size='1GB')
+    dataset.save_to_disk(PATH / 'hf/imagenet-patch')
+    dataset.cleanup_cache_files()
 
 
 if __name__ == '__main__':

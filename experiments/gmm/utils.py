@@ -33,8 +33,8 @@ def make_model(
     emb_features: int = 256,
     normalize: bool = True,
     **absorb,
-) -> ScoreModel:
-    return ScoreModel(
+) -> Denoiser:
+    return Denoiser(
         network=TimeMLP(
             features=5,
             hid_features=hid_features,
