@@ -44,4 +44,6 @@ if __name__ == '__main__':
         corrupt,
         name='Data corruption',
         backend='slurm',
+        export='ALL',
+        account='ariacpg',
     )

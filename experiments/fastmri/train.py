@@ -82,7 +82,7 @@ def generate(model, dataset, rng, batch_size, sharding=None):
     )
 
 
-@job(cpus=4, gpus=4, ram='192GB', time='14-00:00:00', partition='a5000,quadro,tesla')
+@job(cpus=4, gpus=4, ram='256GB', time='2-00:00:00', partition='gpu')
 def train():
     run = wandb.init(project='priors-fastmri-kspace', dir=PATH, config=CONFIG)
     runpath = PATH / f'runs/{run.name}_{run.id}'
@@ -205,5 +205,6 @@ if __name__ == '__main__':
         name='Training from corrupted data',
         backend='slurm',
         export='ALL',
+        account='ariacpg',
         env=['export WANDB_SILENT=true'],
     )

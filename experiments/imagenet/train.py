@@ -26,7 +26,7 @@ CONFIG = {
     # Training
     'laps': 4,
     'epochs': 64,
-    'batch_size': 512,
+    'batch_size': 1024,
     'scheduler': 'constant',
     'lr_init': 1e-4,
     'lr_end': 1e-6,
@@ -78,7 +78,7 @@ def generate(model, dataset, rng, batch_size, sharding=None):
     )
 
 
-@job(cpus=4, gpus=4, ram='384GB', time='14-00:00:00', partition='a5000,quadro,tesla')
+@job(cpus=4, gpus=4, ram='512GB', time='2-00:00:00', partition='ia')
 def train():
     run = wandb.init(project='priors-imagenet-patch', dir=PATH, config=CONFIG)
     runpath = PATH / f'runs/{run.name}_{run.id}'
@@ -202,5 +202,6 @@ if __name__ == '__main__':
         name='Training from corrupted data',
         backend='slurm',
         export='ALL',
+        account='ariacpg',
         env=['export WANDB_SILENT=true'],
     )

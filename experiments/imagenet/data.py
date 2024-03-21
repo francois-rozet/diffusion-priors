@@ -72,4 +72,6 @@ if __name__ == '__main__':
         name='Data corruption',
         backend='slurm',
         prune=True,
+        export='ALL',
+        account='ariacpg',
     )
