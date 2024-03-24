@@ -158,7 +158,7 @@ class NoiseEmbedding(nn.Module):
 
 
 class Denoiser(nn.Module):
-    r"""Denoiser model with EDM-like preconditioning.
+    r"""Denoiser model with EDM-style preconditioning.
 
     .. math:: f(x_t) \approx E[x | x_t]
 
@@ -185,7 +185,11 @@ class Denoiser(nn.Module):
         sigma_t = self.sde.sigma(t)
         sigma_t = sigma_t[..., None]
 
-        return xt / (sigma_t ** 2 + 1) + sigma_t / jnp.sqrt(sigma_t ** 2 + 1) * self.net(xt / jnp.sqrt(sigma_t ** 2 + 1), self.emb(sigma_t), key)
+        c_skip = 1 / (sigma_t ** 2 + 1)
+        c_out = sigma_t / jnp.sqrt(sigma_t ** 2 + 1)
+        c_in = 1 / jnp.sqrt(sigma_t ** 2 + 1)
+
+        return c_skip * xt + c_out * self.net(c_in * xt, self.emb(sigma_t), key)
 
 
 class DenoiserLoss(nn.Module):
