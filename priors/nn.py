@@ -95,7 +95,7 @@ class Modulation(nn.Module):
         )
 
         layer = self.mlp.layers[-2]
-        layer.weight.value = layer.weight.value * 1e-2
+        layer.weight.value = layer.weight.value * 1e-1
 
     @inox.jit
     def __call__(self, t: Array) -> Tuple[Array, Array, Array]:
@@ -126,9 +126,9 @@ class ResBlock(nn.Module):
 
         y = (a + 1) * x + b
         y = self.block(y)
-        y = c * y
+        y = x + c * y
 
-        return x + y
+        return y / jnp.sqrt(1 + c**2)
 
 
 class AttBlock(nn.Module):
@@ -153,9 +153,9 @@ class AttBlock(nn.Module):
         y = rearrange(y, '... H W C -> ... (H W) C')
         y = self.attn(y)
         y = y.reshape(x.shape)
-        y = c * y
+        y = x + c * y
 
-        return x + y
+        return y / jnp.sqrt(1 + c**2)
 
 
 class UNet(nn.Module):
