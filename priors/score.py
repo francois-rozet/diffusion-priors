@@ -65,7 +65,7 @@ class DDPM(nn.Module):
             self.sde = sde
 
     @inox.jit
-    def __call__(self, z: Array, t: Array = 1.0, steps: int = 64, key: Array = None) -> Array:
+    def __call__(self, xt: Array, t: Array = 1.0, steps: int = 64, key: Array = None) -> Array:
         dt = jnp.asarray(t / steps)
         time = jnp.linspace(t, dt, steps)
         keys = jax.random.split(key, steps)
@@ -74,7 +74,6 @@ class DDPM(nn.Module):
             t, key = t_key
             return self.step(xt, t, t - dt, key), None
 
-        xt = z * self.sde.sigma(t)
         x0, _ = jax.lax.scan(f, xt, (time, keys))
 
         return self.model(x0, 0.0)

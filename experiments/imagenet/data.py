@@ -43,7 +43,7 @@ def corrupt():
 
             A[i:i+w, j:j+h] = False
 
-        y = np.random.normal(loc=A * x, scale=1e-3)
+        y = np.random.normal(loc=A * x, scale=1e-2)
 
         return {'A': A, 'y': y}
 

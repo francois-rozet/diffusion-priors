@@ -26,7 +26,7 @@ CONFIG = {
     # Data
     'duplicate': 4,
     # Training
-    'laps': 4,
+    'laps': 16,
     'epochs': 64,
     'batch_size': 256,
     'scheduler': 'constant',
@@ -44,17 +44,25 @@ def measure(A, x):
     return flatten(A * unflatten(x, 32, 32))
 
 def sample(model, y, A, key):
-    sampler = DDIM(
+    if isinstance(model, GaussianDenoiser):
+        sigma_x = model.sigma_x
+    else:
+        sigma_x = None
+
+    sampler = DDPM(
         PosteriorDenoiser(
             model=model,
             A=inox.Partial(measure, A),
             y=flatten(y),
             sigma_y=1e-3 ** 2,
+            sigma_x=sigma_x,
         ),
     )
 
     z = jax.random.normal(key, flatten(y).shape)
-    x = sampler(z, steps=64, key=key)
+    x = z * sampler.sde.sigma(1.0)
+
+    x = sampler(x, steps=64, key=key)
     x = unflatten(x, 32, 32)
     x = np.asarray(x)
 
@@ -67,11 +75,12 @@ def generate(model, dataset, rng, batch_size):
 
         return {'x': x}
 
-    dtype = Array3D(shape=(32, 32, 3), dtype='float32')
+    types = {'x': Array3D(shape=(32, 32, 3), dtype='float32')}
 
     return dataset.map(
         transform,
-        features=Features(**dataset.features, x=dtype),
+        features=Features(types),
+        remove_columns=['y', 'A'],
         keep_in_memory=True,
         batched=True,
         batch_size=batch_size,
@@ -97,9 +106,21 @@ def train():
 
     trainset_yA = dataset['train']
     trainset_yA = concatenate_datasets([trainset_yA] * config.duplicate)
-
     testset_yA = dataset['test']
+
+    y_fit, A_fit = trainset_yA[:16384]['y'], trainset_yA[:16384]['A']
     y_eval, A_eval = testset_yA[:16]['y'], testset_yA[:16]['A']
+
+    mu_x, sigma_x, _ = fit_moments(
+        features=32 * 32 * 3,
+        rank=64,
+        A=inox.Partial(measure, A_fit),
+        y=flatten(y_fit),
+        sigma_y=1e-3 ** 2,
+        key=rng.split(),
+    )
+
+    del y_fit, A_fit
 
     # Model
     model = make_model(key=rng.split(), **config)
@@ -122,17 +143,17 @@ def train():
 
     # Training
     @jax.jit
-    def ell(params, others, x, A, y, key):
+    def ell(params, others, x, key):
         keys = jax.random.split(key, 3)
 
         z = jax.random.normal(keys[0], shape=x.shape)
         t = jax.random.beta(keys[1], a=3, b=3, shape=x.shape[:1])
 
-        return objective(static(params, others), x, z, t, inox.Partial(measure, A), y, key=keys[2])
+        return objective(static(params, others), x, z, t, key=keys[2])
 
     @jax.jit
-    def sgd_step(avrg, params, others, opt_state, x, A, y, key):
-        loss, grads = jax.value_and_grad(ell)(params, others, x, A, y, key)
+    def sgd_step(avrg, params, others, opt_state, x, key):
+        loss, grads = jax.value_and_grad(ell)(params, others, x, key)
         updates, opt_state = optimizer.update(grads, opt_state, params)
         params = optax.apply_updates(params, updates)
         avrg = ema(avrg, params)
@@ -141,15 +162,15 @@ def train():
 
     for lap in range(config.laps):
         if lap > 0:
-            trainset_yAx = generate(model, trainset_yA, rng, config.batch_size)
-            testset_yAx = generate(model, testset_yA, rng, config.batch_size)
+            trainset_x = generate(model, trainset_yA, rng, config.batch_size)
+            testset_x = generate(model, testset_yA, rng, config.batch_size)
         else:
-            trainset_yAx = generate(GaussianDenoiser(), trainset_yA, rng, config.batch_size)
-            testset_yAx = generate(GaussianDenoiser(), testset_yA, rng, config.batch_size)
+            trainset_x = generate(GaussianDenoiser(mu_x, sigma_x), trainset_yA, rng, config.batch_size)
+            testset_x = generate(GaussianDenoiser(mu_x, sigma_x), testset_yA, rng, config.batch_size)
 
         for epoch in (bar := trange(config.epochs, ncols=88)):
             loader = (
-                trainset_yAx
+                trainset_x
                 .shuffle(seed=seed + lap * config.epochs + epoch)
                 .iter(batch_size=config.batch_size, drop_last_batch=True)
             )
@@ -157,27 +178,27 @@ def train():
             losses = []
 
             for batch in prefetch(loader):
-                x, A, y = batch['x'], batch['A'], batch['y']
-                x, y = flatten(x), flatten(y)
+                x = batch['x']
+                x = flatten(x)
 
-                loss, avrg, params, opt_state = sgd_step(avrg, params, others, opt_state, x, A, y, key=rng.split())
+                loss, avrg, params, opt_state = sgd_step(avrg, params, others, opt_state, x, key=rng.split())
                 losses.append(loss)
 
             loss_train = np.stack(losses).mean()
 
             ## Validation
             loader = (
-                testset_yAx
+                testset_x
                 .iter(batch_size=config.batch_size, drop_last_batch=True)
             )
 
             losses = []
 
             for batch in prefetch(loader):
-                x, A, y = batch['x'], batch['A'], batch['y']
-                x, y = flatten(x), flatten(y)
+                x = batch['x']
+                x = flatten(x)
 
-                loss = ell(avrg, others, x, A, y, key=rng.split())
+                loss = ell(avrg, others, x, key=rng.split())
                 losses.append(loss)
 
             loss_val = np.stack(losses).mean()
@@ -190,12 +211,12 @@ def train():
                 model.train(False)
 
                 x = sample(model, y_eval, A_eval, rng.split())
-                x = x.reshape(4, 4, 32, 32, 3)
+                x = x.reshape(4, 4, -1)
 
                 run.log({
                     'loss': loss_train,
                     'loss_val': loss_val,
-                    'samples': wandb.Image(to_pil(x, zoom=2)),
+                    'samples': wandb.Image(show(x, zoom=4)),
                 })
             else:
                 run.log({

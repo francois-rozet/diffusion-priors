@@ -51,8 +51,8 @@ def corrupt():
         y = fft2c(x)
         y = jnp.concatenate((y.real, y.imag), axis=-1)
 
-        A = np.random.uniform(size=(1, 320, 1)) < 0.25
-        A[150:170] = True
+        A = np.random.uniform(size=(1, 320, 1)) < 0.1
+        A[:, 150:170] = True
 
         y = np.random.normal(loc=A * y, scale=1e-2)
 

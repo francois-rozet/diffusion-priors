@@ -10,6 +10,7 @@ from typing import *
 
 from priors.nn import *
 from priors.score import *
+from priors.train import *
 
 
 def show(x: Array, zoom: int = 4, **kwargs) -> Image:
