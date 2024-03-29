@@ -1,7 +1,5 @@
 r"""Score helpers"""
 
-from __future__ import annotations
-
 import inox
 import inox.nn as nn
 import jax
@@ -10,6 +8,8 @@ import math
 
 from jax import Array
 from typing import *
+
+from .linalg import DPLR, transpose
 
 
 class VESDE(nn.Module):
@@ -235,91 +235,14 @@ class DenoiserLoss(nn.Module):
         return jnp.mean(lmbda_t * jnp.mean(error ** 2, axis=-1))
 
 
-class DPLR(NamedTuple):
-    r"""Diagonal plus low-rank matrix."""
-
-    D: Array
-    U: Array = None
-    V: Array = None
-
-    def __add__(self, C: Array) -> DPLR:
-        return DPLR(self.D + C, self.U, self.V)
-
-    def __radd__(self, C: Array) -> DPLR:
-        return DPLR(C + self.D, self.U, self.V)
-
-    def __sub__(self, C: Array) -> DPLR:
-        return DPLR(self.D - C, self.U, self.V)
-
-    def __mul__(self, C: Array) -> DPLR:
-        D = self.D * C
-
-        if self.U is None:
-            U, V = None, None
-        else:
-            U, V = self.U, self.V * C[..., None, :]
-
-        return DPLR(D, U, V)
-
-    def __rmul__(self, C: Array) -> DPLR:
-        D = C * self.D
-
-        if self.U is None:
-            U, V = None, None
-        else:
-            U, V = C[..., None] * self.U, self.V
-
-        return DPLR(D, U, V)
-
-    def __matmul__(self, x: Array) -> Array:
-        if self.U is None:
-            return self.D * x
-        else:
-            return self.D * x + jnp.einsum('...ij,...jk,...k', self.U, self.V, x)
-
-    def __call__(self, x: Array) -> Array:
-        return self @ x
-
-    @property
-    def rank(self) -> int:
-        if self.U is None:
-            return 0
-        else:
-            return self.U.shape[-1]
-
-    @property
-    def inv(self) -> DPLR:
-        D = 1 / self.D
-
-        if self.U is None:
-            U, V = None, None
-        else:
-            U = -D[..., None] * self.U
-            V = jnp.linalg.solve(jnp.eye(self.rank) + jnp.einsum('...ik,...k,...kj', self.V, D, self.U), self.V) * D[..., None, :]
-
-        return DPLR(D, U, V)
-
-    def diag(self) -> Array:
-        if self.U is None:
-            return self.D
-        else:
-            return self.D + jnp.einsum('...ij,...ji->...i', self.U, self.V)
-
-    def norm(self) -> Array:
-        if self.U is None:
-            return jnp.sum(self.D ** 2, axis=-1)
-        else:
-            return jnp.sum(self.D ** 2, axis=-1) + 2 * jnp.einsum('...i,...ij,...ji', self.D, self.U, self.V) + jnp.sum((self.V @ self.U) ** 2, axis=(-1, -2))
-
-
 class GaussianDenoiser(nn.Module):
     r"""Denoiser model for a Gaussian random variable.
 
     .. math:: p(x) = N(x | \mu_x, \Sigma_x)
 
     Arguments:
-        mu_x: The data mean :math:`\mu_x`.
-        sigma_x: The data covariance :math:`\Sigma_x`.
+        mu_x: The mean :math:`\mu_x`.
+        sigma_x: The covariance :math:`\Sigma_x`.
         sde: The forward SDE.
     """
 
@@ -345,7 +268,7 @@ class GaussianDenoiser(nn.Module):
         sigma_t = self.sde.sigma(t)
         sigma_t = sigma_t[..., None] ** 2
 
-        return xt - sigma_t * (self.sigma_x + sigma_t).inv(xt - self.mu_x)
+        return xt - sigma_t * (self.sigma_x + sigma_t).solve(xt - self.mu_x)
 
 
 class PosteriorDenoiser(nn.Module):
@@ -358,7 +281,7 @@ class PosteriorDenoiser(nn.Module):
         A: The forward model :math:`A`.
         y: An observation.
         sigma_y: The observation covariance :math:`\Sigma_y`.
-        sigma_x: The data covariance :math:`\Sigma_x`.
+        sigma_x: The hidden covariance :math:`\Sigma_x`.
         sde: The forward SDE.
     """
 
@@ -368,7 +291,7 @@ class PosteriorDenoiser(nn.Module):
         A: Callable[[Array], Array],
         y: Array,
         sigma_y: Union[Array, DPLR],
-        sigma_x: Union[Array, DPLR] = 1.0,
+        sigma_x: Union[Array, DPLR] = None,
         sde: VESDE = None,
         rtol: float = 1e-3,
         maxiter: int = None,
@@ -382,7 +305,7 @@ class PosteriorDenoiser(nn.Module):
         if not isinstance(sigma_y, DPLR):
             sigma_y = DPLR(sigma_y)
 
-        if not isinstance(sigma_x, DPLR):
+        if not isinstance(sigma_x, DPLR) and sigma_x is not None:
             sigma_x = DPLR(sigma_x)
 
         self.sigma_y = jax.tree_util.tree_map(jnp.asarray, sigma_y)
@@ -403,14 +326,25 @@ class PosteriorDenoiser(nn.Module):
 
         x, vjp = jax.vjp(lambda xt: self.model(xt, t, key), xt)
         y, A = jax.linearize(self.A, x)
-        At = jax.linear_transpose(self.A, x)
+        At = transpose(A, x)
 
-        sigma_x_xt = sigma_t + (-sigma_t) * (self.sigma_x + sigma_t).inv * sigma_t
-        sigma_y_xt = lambda vec: self.sigma_y(vec) + A(sigma_x_xt(*At(vec)))
+        if self.sigma_x is None:
+            u = At(y - self.y)
+            v, = vjp(u)
+
+            gamma = jnp.linalg.norm(v, axis=-1) / jnp.linalg.norm(u, axis=-1)
+            gamma = jnp.broadcast_to(gamma[..., None], x.shape)
+
+            sigma_x_xt = sigma_t * DPLR(gamma)
+        else:
+            sigma_x_xt = sigma_t + (-sigma_t) * (self.sigma_x + sigma_t).inv * sigma_t
+
+        def sigma_y_xt(v):
+            return self.sigma_y @ v + A(sigma_x_xt @ At(v))
 
         error = self.y - y
         error, _ = jax.scipy.sparse.linalg.cg(sigma_y_xt, error, tol=self.rtol, maxiter=self.maxiter)
-        error, = At(error)
+        error = At(error)
         score, = vjp(error)
 
         return x + sigma_t * score
