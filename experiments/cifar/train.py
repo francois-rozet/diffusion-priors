@@ -43,6 +43,7 @@ CONFIG = {
 def measure(A, x):
     return flatten(A * unflatten(x, 32, 32))
 
+
 def sample(model, y, A, key):
     if isinstance(model, GaussianDenoiser):
         sigma_x = model.sigma_x
@@ -67,6 +68,7 @@ def sample(model, y, A, key):
     x = np.asarray(x)
 
     return x
+
 
 def generate(model, dataset, rng, batch_size):
     def transform(batch):
