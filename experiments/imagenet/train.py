@@ -111,7 +111,7 @@ def train(runid: int, lap: int):
     distributed = sharding.reshape(-1, 1, 1, 1)
 
     # RNG
-    seed = hash(runpath) % 2**16
+    seed = hash((runpath, lap)) % 2**16
     rng = inox.random.PRNG(seed)
 
     # Data
@@ -253,7 +253,7 @@ if __name__ == '__main__':
 
     schedule(
         *jobs,
-        name='Training from corrupted data',
+        name=f'Training {runid}',
         backend='slurm',
         export='ALL',
         account='ariacpg',
