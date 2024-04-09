@@ -71,11 +71,27 @@ def sample(model, y, A, key):
     return x
 
 
+def psample(model, y, A, key):
+    devices = jax.device_count()
+
+    y = rearrange(y, '(D N) ... -> D N ...', D=devices)
+    A = rearrange(A, '(D N) ... -> D N ...', D=devices)
+
+    key = jax.random.split(key, devices)
+
+    x = inox.pmap(
+        sample,
+        in_axes=(None, 0, 0, 0),
+        out_axes=0,
+    )(model, y, A, key)
+
+    return rearrange(x, 'D N ... -> (D N) ...')
+
+
 def generate(model, dataset, rng, batch_size, sharding=None):
     def transform(batch):
         y, A = batch['y'], batch['A']
-        y, A = jax.device_put((y, A), sharding)
-        x = sample(model, y, A, rng.split())
+        x = psample(model, y, A, rng.split())
         x = np.asarray(x)
 
         return {'x': x}
@@ -218,7 +234,7 @@ def train(runid: int, lap: int):
             model = static(avrg, others)
             model.train(False)
 
-            x = sample(model, y_eval, A_eval, rng.split())
+            x = psample(model, y_eval, A_eval, rng.split())
             x = x.reshape(2, 2, -1)
 
             run.log({
