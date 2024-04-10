@@ -1,4 +1,4 @@
-r"""Training helpers"""
+r"""Common helpers"""
 
 import inox
 import inox.nn as nn
@@ -140,8 +140,8 @@ def fit_moments(
     y: Array,
     sigma_y: Tuple[Array, DPLR],
     iterations: int = 16,
-    steps: int = 64,
     key: Array = None,
+    **kwargs,
 ) -> Tuple[Array, DPLR]:
     r"""Fits :math:`(\mu_x, \Sigma_x)` by expectation maximization."""
 
@@ -149,23 +149,6 @@ def fit_moments(
         rng = get_rng()
     else:
         rng = PRNG(key)
-
-    def sample(mu_x, sigma_x, A, y, key):
-        sampler = DDPM(
-            PosteriorDenoiser(
-                model=GaussianDenoiser(mu_x, sigma_x),
-                A=A,
-                y=y,
-                sigma_y=sigma_y,
-                sigma_x=sigma_x,
-            )
-        )
-
-        z = jax.random.normal(key, (len(y), features))
-        x = mu_x + z * sampler.sde.sigma(1.0)
-        x = sampler(x, steps=steps, key=key)
-
-        return x
 
     mu_x = jnp.zeros(features)
     sigma_x = DPLR(
@@ -176,17 +159,67 @@ def fit_moments(
 
     for _ in tqdm(range(iterations), ncols=88):
         # Expectation
-        if isinstance(y, list):
-            x = []
-
-            for Ai, yi in zip(A, y):
-                x.append(sample(mu_x, sigma_x, Ai, yi, rng.split()))
-
-            x = jnp.concatenate(x, axis=0)
-        else:
-            x = sample(mu_x, sigma_x, A, y, rng.split())
+        x = sample_any(
+            model=GaussianDenoiser(mu_x, sigma_x),
+            shape=(len(y), features),
+            A=A,
+            y=y,
+            sigma_y=sigma_y,
+            key=rng.split(),
+            **kwargs,
+        )
 
         # Maximization
         mu_x, sigma_x = ppca(x, rank=rank, key=rng.split())
 
     return mu_x, sigma_x
+
+
+def sample_any(
+    model: nn.Module,
+    shape: Sequence[int],
+    A: Callable[[Array], Array] = None,
+    y: Array = None,
+    sigma_y: Union[Array, DPLR] = None,
+    key: Array = None,
+    sampler: str = 'ddpm',
+    steps: int = 64,
+    rtol: float = 1e-3,
+    maxiter: int = 5,
+    **kwargs,
+) -> Array:
+    r"""Samples from :math:`q(x)` or :math:`q(x | A, y)`."""
+
+    mu_x = getattr(model, 'mu_x', None)
+    sigma_x = getattr(model, 'sigma_x', None)
+
+    if A is None or y is None:
+        pass
+    else:
+        model = PosteriorDenoiser(
+            model=model,
+            A=A,
+            y=y,
+            sigma_y=sigma_y,
+            sigma_x=sigma_x,
+            rtol=rtol,
+            maxiter=maxiter,
+        )
+
+    if sampler == 'ddpm':
+        sampler = DDPM(model, **kwargs)
+    elif sampler == 'ddim':
+        sampler = DDIM(model, **kwargs)
+    elif sampler == 'pc':
+        sampler = PredictorCorrector(model, **kwargs)
+
+    z = jax.random.normal(key, shape)
+
+    if mu_x is None:
+        x1 = sampler.sde(0.0, z, 1.0)
+    else:
+        x1 = sampler.sde(mu_x, z, 1.0)
+
+    x0 = sampler(x1, steps=steps, key=key)
+
+    return x0

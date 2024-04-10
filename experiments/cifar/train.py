@@ -7,8 +7,9 @@ import numpy as np
 import optax
 import wandb
 
-from datasets import load_from_disk, concatenate_datasets, Array3D, Features
+from datasets import load_from_disk, Array3D, Features
 from dawgz import job, schedule
+from functools import partial
 from tqdm import trange
 from typing import *
 
@@ -18,16 +19,14 @@ from utils import *
 CONFIG = {
     # Architecture
     'hid_channels': (128, 256, 384),
-    'hid_blocks': (3, 3, 3),
+    'hid_blocks': (5, 5, 5),
     'kernel_size': (3, 3),
     'emb_features': 256,
     'heads': {2: 4},
     'dropout': 0.1,
-    # Data
-    'duplicate': 4,
     # Training
     'laps': 16,
-    'epochs': 64,
+    'epochs': 256,
     'batch_size': 256,
     'scheduler': 'constant',
     'lr_init': 2e-4,
@@ -40,37 +39,10 @@ CONFIG = {
 }
 
 
-def measure(A, x):
-    return flatten(A * unflatten(x, 32, 32))
-
-
-def sample(model, y, A, key):
-    if isinstance(model, GaussianDenoiser):
-        sigma_x = model.sigma_x
-    else:
-        sigma_x = None
-
-    sampler = DDPM(
-        PosteriorDenoiser(
-            model=model,
-            A=inox.Partial(measure, A),
-            y=flatten(y),
-            sigma_y=1e-3 ** 2,
-            sigma_x=sigma_x,
-        ),
-    )
-
-    z = jax.random.normal(key, flatten(y).shape)
-    x = z * sampler.sde.sigma(1.0)
-    x = sampler(x, steps=64, key=key)
-    x = unflatten(x, 32, 32)
-
-    return x
-
-
-def generate(model, dataset, rng, batch_size):
+def generate(model, dataset, rng, batch_size, sharding=None):
     def transform(batch):
         y, A = batch['y'], batch['A']
+        y, A = jax.device_put((y, A), sharding)
         x = sample(model, y, A, rng.split())
         x = np.asarray(x)
 
@@ -89,16 +61,29 @@ def generate(model, dataset, rng, batch_size):
     )
 
 
-@job(cpus=4, gpus=1, ram='64GB', time='2-00:00:00', partition='gpu')
-def train():
-    run = wandb.init(project='priors-cifar-mask', dir=PATH, config=CONFIG)
+def train(runid: int, lap: int):
+    run = wandb.init(
+        project='priors-cifar-mask',
+        id=runid,
+        resume='allow',
+        dir=PATH,
+        config=CONFIG,
+    )
+
     runpath = PATH / f'runs/{run.name}_{run.id}'
     runpath.mkdir(parents=True, exist_ok=True)
 
     config = run.config
 
+    # Sharding
+    jax.config.update('jax_threefry_partitionable', True)
+
+    mesh = jax.sharding.Mesh(jax.devices(), 'i')
+    replicated = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec())
+    distributed = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec('i'))
+
     # RNG
-    seed = hash(runpath) % 2**16
+    seed = hash((runpath, lap)) % 2**16
     rng = inox.random.PRNG(seed)
 
     # Data
@@ -106,29 +91,60 @@ def train():
     dataset.set_format('numpy')
 
     trainset_yA = dataset['train']
-    trainset_yA = concatenate_datasets([trainset_yA] * config.duplicate)
     testset_yA = dataset['test']
 
-    y_fit, A_fit = trainset_yA[:16384]['y'], trainset_yA[:16384]['A']
     y_eval, A_eval = testset_yA[:16]['y'], testset_yA[:16]['A']
+    y_eval, A_eval = jax.device_put((y_eval, A_eval), distributed)
 
-    mu_x, sigma_x = fit_moments(
-        features=32 * 32 * 3,
-        rank=64,
-        A=inox.Partial(measure, A_fit),
-        y=flatten(y_fit),
-        sigma_y=1e-3 ** 2,
-        key=rng.split(),
-    )
+    # Previous
+    if lap > 0:
+        previous = load_module(runpath / f'checkpoint_{lap - 1}.pkl')
+    else:
+        y_fit, A_fit = trainset_yA[:16384]['y'], trainset_yA[:16384]['A']
+        y_fit, A_fit = jax.device_put((y_fit, A_fit), distributed)
 
-    del y_fit, A_fit
+        mu_x, sigma_x = fit_moments(
+            features=32 * 32 * 3,
+            rank=64,
+            A=inox.Partial(measure, A_fit),
+            y=flatten(y_fit),
+            sigma_y=1e-3 ** 2,
+            sampler='ddim',
+            steps=256,
+            maxiter=None,
+            key=rng.split(),
+        )
+
+        del y_fit, A_fit
+
+        previous = GaussianDenoiser(mu_x, sigma_x)
+
+    ## Generate
+    static, arrays = previous.partition()
+    arrays = jax.device_put(arrays, replicated)
+    previous = static(arrays)
+
+    trainset_x = generate(previous, trainset_yA, rng, config.batch_size, distributed)
+    testset_x = generate(previous, testset_yA, rng, config.batch_size, distributed)
+
+    ## Moments
+    x_fit = trainset_x[:16384]['x']
+    x_fit = flatten(x_fit)
+
+    mu_x = jnp.mean(x_fit, axis=0)
+
+    del x_fit
 
     # Model
-    model = make_model(key=rng.split(), **config)
+    if lap > 0:
+        model = previous
+    else:
+        model = make_model(key=rng.split(), **config)
+
+    model.mu_x = mu_x
     model.train(True)
 
     static, params, others = model.partition(nn.Parameter)
-    start = params
 
     # Objective
     objective = DenoiserLoss()
@@ -143,6 +159,8 @@ def train():
     avrg = params
 
     # Training
+    avrg, params, others, opt_state = jax.device_put((avrg, params, others, opt_state), replicated)
+
     @jax.jit
     @jax.vmap
     def augment(x, key):
@@ -171,88 +189,96 @@ def train():
 
         return loss, avrg, params, opt_state
 
-    for lap in range(config.laps):
-        if lap > 0:
-            trainset_x = generate(model, trainset_yA, rng, config.batch_size)
-            testset_x = generate(model, testset_yA, rng, config.batch_size)
+    for epoch in (bar := trange(config.epochs, ncols=88)):
+        loader = (
+            trainset_x
+            .shuffle(seed=seed + lap * config.epochs + epoch)
+            .iter(batch_size=config.batch_size, drop_last_batch=True)
+        )
+
+        losses = []
+
+        for batch in prefetch(loader):
+            x = batch['x']
+            x = jax.device_put(x, distributed)
+            x = augment(x, rng.split(len(x)))
+            x = flatten(x)
+
+            loss, avrg, params, opt_state = sgd_step(avrg, params, others, opt_state, x, key=rng.split())
+            losses.append(loss)
+
+        loss_train = np.stack(losses).mean()
+
+        ## Validation
+        loader = (
+            testset_x
+            .iter(batch_size=config.batch_size, drop_last_batch=True)
+        )
+
+        losses = []
+
+        for batch in prefetch(loader):
+            x = batch['x']
+            x = jax.device_put(x, distributed)
+            x = flatten(x)
+
+            loss = ell(avrg, others, x, key=rng.split())
+            losses.append(loss)
+
+        loss_val = np.stack(losses).mean()
+
+        bar.set_postfix(loss=loss_train, loss_val=loss_val)
+
+        ## Eval
+        if (epoch + 1) % 16 == 0:
+            model = static(avrg, others)
+            model.train(False)
+
+            x = sample(model, y_eval, A_eval, rng.split())
+            x = x.reshape(4, 4, 32, 32, 3)
+
+            run.log({
+                'loss': loss_train,
+                'loss_val': loss_val,
+                'samples': wandb.Image(to_pil(x, zoom=4)),
+            })
         else:
-            trainset_x = generate(GaussianDenoiser(mu_x, sigma_x), trainset_yA, rng, config.batch_size)
-            testset_x = generate(GaussianDenoiser(mu_x, sigma_x), testset_yA, rng, config.batch_size)
+            run.log({
+                'loss': loss_train,
+                'loss_val': loss_val,
+            })
 
-        for epoch in (bar := trange(config.epochs, ncols=88)):
-            loader = (
-                trainset_x
-                .shuffle(seed=seed + lap * config.epochs + epoch)
-                .iter(batch_size=config.batch_size, drop_last_batch=True)
-            )
+    ## Checkpoint
+    model = static(avrg, others)
+    model.train(False)
 
-            losses = []
-
-            for batch in prefetch(loader):
-                x = batch['x']
-                x = augment(x, rng.split(len(x)))
-                x = flatten(x)
-
-                loss, avrg, params, opt_state = sgd_step(avrg, params, others, opt_state, x, key=rng.split())
-                losses.append(loss)
-
-            loss_train = np.stack(losses).mean()
-
-            ## Validation
-            loader = (
-                testset_x
-                .iter(batch_size=config.batch_size, drop_last_batch=True)
-            )
-
-            losses = []
-
-            for batch in prefetch(loader):
-                x = batch['x']
-                x = flatten(x)
-
-                loss = ell(avrg, others, x, key=rng.split())
-                losses.append(loss)
-
-            loss_val = np.stack(losses).mean()
-
-            bar.set_postfix(loss=loss_train, loss_val=loss_val)
-
-            ## Eval
-            if (epoch + 1) % 4 == 0:
-                model = static(avrg, others)
-                model.train(False)
-
-                x = sample(model, y_eval, A_eval, rng.split())
-                x = x.reshape(4, 4, -1)
-
-                run.log({
-                    'loss': loss_train,
-                    'loss_val': loss_val,
-                    'samples': wandb.Image(show(x, zoom=4)),
-                })
-            else:
-                run.log({
-                    'loss': loss_train,
-                    'loss_val': loss_val,
-                })
-
-        ## Checkpoint
-        model = static(avrg, others)
-        model.train(False)
-
-        dump_module(model, runpath / f'checkpoint_{lap}.pkl')
-
-        ## Refresh
-        params = avrg = start
-        opt_state = optimizer.init(params)
-
-    run.finish()
+    dump_module(model, runpath / f'checkpoint_{lap}.pkl')
 
 
 if __name__ == '__main__':
+    runid = wandb.util.generate_id()
+
+    jobs = []
+
+    for lap in range(CONFIG.get('laps')):
+        jobs.append(
+            job(
+                partial(train, runid=runid, lap=lap),
+                name=f'train_{lap}',
+                cpus=4,
+                gpus=4,
+                ram='64GB',
+                time='1-00:00:00',
+                partition='gpu',
+            )
+        )
+
+        if lap > 0:
+            jobs[lap].after(jobs[lap - 1])
+
     schedule(
-        train,
-        name='Training from corrupted data',
+        *jobs,
+        name=f'Training {runid}',
         backend='slurm',
         export='ALL',
         account='ariacpg',

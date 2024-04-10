@@ -7,11 +7,11 @@ from jax import Array
 from pathlib import Path
 from typing import *
 
+from priors.common import *
 from priors.data import *
 from priors.image import *
 from priors.nn import *
 from priors.score import *
-from priors.train import *
 
 
 if 'SCRATCH' in os.environ:
@@ -23,8 +23,24 @@ else:
 PATH.mkdir(parents=True, exist_ok=True)
 
 
-def show(x: Array, zoom: int = 4) -> Image:
-    return to_pil(unflatten(x, 32, 32), zoom=zoom)
+def measure(A: Array, x: Array) -> Array:
+    return flatten(A * unflatten(x, 32, 32))
+
+
+def sample(model: nn.Module, y: Array, A: Array, key: Array, **kwargs) -> Array:
+    x = sample_any(
+        model=model,
+        shape=flatten(y).shape,
+        A=inox.Partial(measure, A),
+        y=flatten(y),
+        sigma_y=1e-3 ** 2,
+        key=key,
+        **kwargs,
+    )
+
+    x = unflatten(x, 32, 32)
+
+    return x
 
 
 def make_model(

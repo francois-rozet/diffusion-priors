@@ -47,9 +47,10 @@ def export():
 @job(cpus=4, ram='64GB', time='06:00:00')
 def corrupt():
     def transform(row):
+        jax.config.update('jax_platform_name', 'cpu')
+
         x = row['x']
-        y = fft2c(x)
-        y = jnp.concatenate((y.real, y.imag), axis=-1)
+        y = complex2real(fft2c(x))
 
         A = np.random.uniform(size=(1, 320, 1)) < 0.1
         A[:, 150:170] = True

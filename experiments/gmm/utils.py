@@ -8,9 +8,9 @@ from jax import Array
 from PIL import Image
 from typing import *
 
+from priors.common import *
 from priors.nn import *
 from priors.score import *
-from priors.train import *
 
 
 def show(x: Array, zoom: int = 4, **kwargs) -> Image:
@@ -26,6 +26,42 @@ def show(x: Array, zoom: int = 4, **kwargs) -> Image:
         hist = hist.resize((hist.height * zoom, hist.width * zoom), Image.NEAREST)
 
     return hist
+
+
+def make_data(n: int, key: Array) -> Tuple[Array, Array, Array]:
+    keys = jax.random.split(key, 5)
+
+    # x
+    modes = jax.random.uniform(keys[0], (8, 5), minval=-2.0, maxval=2.0)
+
+    i = jax.random.randint(keys[1], (n,), minval=0, maxval=len(modes))
+    x = jax.random.normal(keys[2], (n, 5)) / 8
+    x = modes[i] + x
+
+    # A
+    A = jax.random.normal(keys[3], (n, 2, 5))
+    A = A / jnp.linalg.norm(A, axis=-1, keepdims=True)
+
+    # y
+    y = measure(A, x) + 1e-3 * jax.random.normal(keys[4], (n, 2))
+
+    return x, A, y
+
+
+def measure(A: Array, x: Array) -> Array:
+    return jnp.einsum('...ij,...j->...i', A, x)
+
+
+def sample(model: nn.Module, A: Array, y: Array, key: Array, **kwargs) -> Array:
+    return sample_any(
+        model=model,
+        shape=(len(y), 5),
+        A=inox.Partial(measure, A),
+        y=y,
+        sigma_y=1e-3 ** 2,
+        key=key,
+        **kwargs,
+    )
 
 
 def make_model(

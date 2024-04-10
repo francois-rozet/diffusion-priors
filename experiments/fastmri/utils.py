@@ -1,17 +1,17 @@
 r"""FastMRI experiment helpers"""
 
-import numpy as np
 import os
 
 from jax import Array
+from jax.experimental.shard_map import shard_map
 from pathlib import Path
 from typing import *
 
+from priors.common import *
 from priors.data import *
 from priors.image import *
 from priors.nn import *
 from priors.score import *
-from priors.train import *
 
 
 if 'SCRATCH' in os.environ:
@@ -59,12 +59,50 @@ def ifft2c(k: Array, norm: str = 'ortho') -> Array:
     )
 
 
-def show(x: Array, zoom: int = 1) -> Image:
-    x = unflatten(x, 320, 320)
-    x = real2complex(x)
-    x = ifft2c(x).real
+def measure(A: Array, x: Array, shard: bool = False) -> Array:
+    def f(A: Array, x: Array) -> Array:
+        x = unflatten(x, 320, 320)
+        y = fft2c(x)
+        y = A * y
+        y = complex2real(y)
+        y = flatten(y)
 
-    return to_pil(x, zoom=zoom)
+        return y
+
+    if shard:
+        mesh = jax.sharding.Mesh(jax.devices(), 'i')
+        spec = jax.sharding.PartitionSpec('i')
+
+        return shard_map(
+            f=f,
+            mesh=mesh,
+            in_specs=spec,
+            out_specs=spec,
+        )(A, x)
+    else:
+        return f(A, x)
+
+
+def sample(
+    model: nn.Module,
+    y: Array,
+    A: Array,
+    key: Array,
+    **kwargs,
+) -> Array:
+    x = sample_any(
+        model=model,
+        shape=(len(y), 320 * 320 * 1),
+        A=inox.Partial(measure, A, shard=True),
+        y=flatten(y),
+        sigma_y=1e-2 ** 2,
+        key=key,
+        **kwargs,
+    )
+
+    x = unflatten(x, 320, 320)
+
+    return x
 
 
 def make_model(
@@ -78,9 +116,9 @@ def make_model(
     **absorb,
 ) -> Denoiser:
     return Denoiser(
-        network=SpectralUNet(
-            in_channels=32,
-            out_channels=32,
+        network=FlatUNet(
+            in_channels=16,
+            out_channels=16,
             hid_channels=hid_channels,
             hid_blocks=hid_blocks,
             kernel_size=kernel_size,
@@ -93,14 +131,12 @@ def make_model(
     )
 
 
-class SpectralUNet(UNet):
+class FlatUNet(UNet):
     def __call__(self, x: Array, t: Array, key: Array = None) -> Array:
         x = unflatten(x, width=320, height=320)
-        x = complex2real(ifft2c(real2complex(x)))
         x = rearrange(x, '... (H h) (W w) C -> ... H W (h w C)', h=4, w=4)
         x = super().__call__(x, t, key)
         x = rearrange(x, '... H W (h w C) -> ... (H h) (W w) C', h=4, w=4)
-        x = complex2real(fft2c(real2complex(x)))
         x = flatten(x)
 
         return x
