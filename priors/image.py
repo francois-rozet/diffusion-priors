@@ -1,5 +1,7 @@
 r"""Image helpers"""
 
+import jax
+import jax.numpy as jnp
 import numpy as np
 
 from einops import rearrange
@@ -39,3 +41,26 @@ def to_pil(x: Array, zoom: int = 1) -> Image:
         x = x.resize((zoom * x.width, zoom * x.height), Image.NEAREST)
 
     return x
+
+
+def rand_flip(x: Array, key: Array, axis: int = -2) -> Array:
+    return jnp.where(
+        jax.random.bernoulli(key),
+        x,
+        jnp.flip(x, axis=axis),
+    )
+
+
+def rand_shake(x: Array, key: Array, delta: int = 1, mode: str = 'reflect') -> Array:
+    i = jax.random.randint(key, shape=(3,), minval=0, maxval=2 * delta + 1)
+    i = i.at[-1].set(0)
+
+    return jax.lax.dynamic_slice(
+        jnp.pad(
+            x,
+            pad_width=((delta, delta), (delta, delta), (0, 0)),
+            mode=mode,
+        ),
+        start_indices=i,
+        slice_sizes=x.shape,
+    )

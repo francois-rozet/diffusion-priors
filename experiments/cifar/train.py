@@ -144,6 +144,16 @@ def train():
 
     # Training
     @jax.jit
+    @jax.vmap
+    def augment(x, key):
+        keys = jax.random.split(key, 2)
+
+        x = rand_flip(x, keys[0], axis=-2)
+        x = rand_shake(x, keys[1], delta=1)
+
+        return x
+
+    @jax.jit
     def ell(params, others, x, key):
         keys = jax.random.split(key, 3)
 
@@ -180,6 +190,7 @@ def train():
 
             for batch in prefetch(loader):
                 x = batch['x']
+                x = augment(x, rng.split(len(x)))
                 x = flatten(x)
 
                 loss, avrg, params, opt_state = sgd_step(avrg, params, others, opt_state, x, key=rng.split())

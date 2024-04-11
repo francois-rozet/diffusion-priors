@@ -189,6 +189,18 @@ def train(runid: int, lap: int):
     # Training
     avrg, params, others, opt_state = jax.device_put((avrg, params, others, opt_state), replicated)
 
+    @jax.jit
+    @jax.vmap
+    def augment(x, key):
+        keys = jax.random.split(key, 2)
+
+        x = ifft2c(real2complex(x))
+        x = rand_flip(x, keys[0], axis=-2)
+        x = rand_shake(x, keys[1], delta=4)
+        x = complex2real(fft2c(x))
+
+        return x
+
     def ell(params, others, x, key):
         keys = jax.random.split(key, 3)
 
@@ -219,6 +231,7 @@ def train(runid: int, lap: int):
 
         for batch in prefetch(loader):
             x = batch['x']
+            x = augment(x, rng.split(len(x)))
             x = jax.device_put(x, distributed)
             x = flatten(x)
 
