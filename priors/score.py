@@ -328,22 +328,21 @@ class PosteriorDenoiser(nn.Module):
         At = transpose(A, x)
 
         if self.sigma_x is None:
-            u = At(y - self.y)
-            v, = vjp(u)
-
-            gamma = jnp.linalg.norm(v, axis=-1) / jnp.linalg.norm(u, axis=-1)
-            gamma = gamma[..., None]
-
-            sigma_x_xt = sigma_t * DPLR(gamma)
+            def sigma_y_xt(v):
+                return self.sigma_y @ v + sigma_t * A(*vjp(At(v)))
         else:
             sigma_x_xt = sigma_t + (-sigma_t**2) * (self.sigma_x + sigma_t).inv
 
-        def sigma_y_xt(v):
-            return self.sigma_y @ v + A(sigma_x_xt @ At(v))
+            def sigma_y_xt(v):
+                return self.sigma_y @ v + A(sigma_x_xt @ At(v))
 
-        error = self.y - y
-        error, _ = jax.scipy.sparse.linalg.cg(sigma_y_xt, error, tol=self.rtol, maxiter=self.maxiter)
-        error = At(error)
-        score, = vjp(error)
+        v, _ = jax.scipy.sparse.linalg.cg(
+            A=sigma_y_xt,
+            b=self.y - y,
+            tol=self.rtol,
+            maxiter=self.maxiter,
+        )
+
+        score, = vjp(At(v))
 
         return x + sigma_t * score
