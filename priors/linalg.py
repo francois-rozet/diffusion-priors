@@ -70,15 +70,18 @@ class DPLR(NamedTuple):
             return self.U.shape[-1]
 
     @property
+    def W(self) -> Array:  # capacitance
+        return jnp.eye(self.rank) + jnp.einsum('...ik,...k,...kj', self.V, 1 / self.D, self.U)
+
+    @property
     def inv(self) -> DPLR:
         D = 1 / self.D
 
         if self.U is None:
             U, V = None, None
         else:
-            W = jnp.eye(self.rank) + jnp.einsum('...ik,...k,...kj', self.V, D, self.U)
             U = -D[..., None] * self.U
-            V = jnp.linalg.solve(W, self.V) * D[..., None, :]
+            V = jnp.linalg.solve(self.W, self.V) * D[..., None, :]
 
         return DPLR(D, U, V)
 
@@ -88,9 +91,7 @@ class DPLR(NamedTuple):
         if self.U is None:
             return D * x
         else:
-            W = jnp.eye(self.rank) + jnp.einsum('...ik,...k,...kj', self.V, D, self.U)
-
-            return D * x - D * jnp.squeeze(self.U @ jnp.linalg.solve(W, self.V @ jnp.expand_dims(D * x, axis=-1)), axis=-1)
+            return D * x - D * jnp.squeeze(self.U @ jnp.linalg.solve(self.W, self.V @ jnp.expand_dims(D * x, axis=-1)), axis=-1)
 
     def diag(self) -> Array:
         if self.U is None:
@@ -105,9 +106,7 @@ class DPLR(NamedTuple):
             return jnp.sum(self.D ** 2, axis=-1) + 2 * jnp.einsum('...i,...ij,...ji', self.D, self.U, self.V) + jnp.sum((self.V @ self.U) ** 2, axis=(-1, -2))
 
     def slogdet(self) -> Tuple[Array, Array]:
-        W = jnp.eye(self.rank) + jnp.einsum('...ik,...k,...kj', self.V, 1 / self.D, self.U)
-
-        sign, logabsdet = jnp.linalg.slogdet(W)
+        sign, logabsdet = jnp.linalg.slogdet(self.W)
         sign = sign * jnp.prod(jnp.sign(self.D), axis=-1)
         logabsdet = logabsdet + jnp.sum(jnp.log(jnp.abs(self.D)), axis=-1)
 

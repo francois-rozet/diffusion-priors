@@ -3,6 +3,7 @@ r"""Training helpers"""
 import inox
 import inox.nn as nn
 import jax
+import jax.experimental.sparse as jes
 import jax.numpy as jnp
 import optax
 import pickle
@@ -10,6 +11,7 @@ import pickle
 from inox.random import PRNG, get_rng
 from jax import Array
 from pathlib import Path
+from tqdm import tqdm
 from typing import *
 
 from .linalg import *
@@ -94,67 +96,97 @@ class EMA(inox.Namespace):
         return x + self.alpha * (y - x)
 
 
+@inox.jit
+def ppca(x: Array, key: Array, rank: int = 1) -> Tuple[Array, DPLR]:
+    r"""Fits :math:`(\mu_x, \Sigma_x)` by probabilistic principal component analysis (PPCA).
+
+    References:
+        https://www.miketipping.com/papers/met-mppca.pdf
+    """
+
+    samples, features = x.shape
+
+    mu_x = jnp.mean(x, axis=0)
+    x = x - mu_x
+
+    if samples < features:
+        C = x @ x.T / samples
+    else:
+        C = x.T @ x / samples
+
+    if rank < len(C) // 5:
+        Q = jax.random.normal(key, (len(C), rank))
+        L, Q, _ = jes.linalg.lobpcg_standard(C, Q)
+    else:
+        L, Q = jnp.linalg.eigh(C)
+        L, Q = L[-rank:], Q[:, -rank:]
+
+    if samples < features:
+        Q = x.T @ Q
+        Q = Q / jnp.linalg.norm(Q, axis=0)
+
+    D = (jnp.trace(C) - jnp.sum(L)) / (features - rank)
+    U = Q * jnp.sqrt(L - D)
+
+    sigma_x = DPLR(D * jnp.ones(features), U, U.T)
+
+    return mu_x, sigma_x
+
+
 def fit_moments(
     features: int,
     rank: int,
     A: Callable[[Array], Array],
     y: Array,
-    sigma_y: Array,
-    epochs: int = 4096,
-    learning_rate: float = 1e-3,
-    epsilon: float = 1e-2,
+    sigma_y: Tuple[Array, DPLR],
+    iterations: int = 16,
+    steps: int = 64,
     key: Array = None,
 ) -> Tuple[Array, DPLR]:
-    r"""Fits :math:`\mu_x` and :math:`\Sigma_x` given pairs :math:`(A, y)`."""
+    r"""Fits :math:`(\mu_x, \Sigma_x)` by expectation maximization."""
 
     if key is None:
         rng = get_rng()
     else:
         rng = PRNG(key)
 
-    At = transpose(A, jnp.zeros((len(y), features)))
+    def sample(mu_x, sigma_x, A, y, key):
+        sampler = DDPM(
+            PosteriorDenoiser(
+                model=GaussianDenoiser(mu_x, sigma_x),
+                A=A,
+                y=y,
+                sigma_y=sigma_y,
+                sigma_x=sigma_x,
+            )
+        )
 
-    mu_x, _ = jax.scipy.sparse.linalg.cg(
-        A=lambda x: jnp.mean(At(A(x)), axis=0),
-        b=jnp.mean(At(y), axis=0),
+        z = jax.random.normal(key, (len(y), features))
+        x = mu_x + z * sampler.sde.sigma(1.0)
+        x = sampler(x, steps=steps, key=key)
+
+        return x
+
+    mu_x = jnp.zeros(features)
+    sigma_x = DPLR(
+        jnp.ones(features),
+        jnp.zeros((features, rank)),
+        jnp.zeros((rank, features)),
     )
 
-    bias = A(mu_x) - y
+    for _ in tqdm(range(iterations), ncols=88):
+        # Expectation
+        if isinstance(y, list):
+            x = []
 
-    def objective(params, z):
-        d, U = params
+            for Ai, yi in zip(A, y):
+                x.append(sample(mu_x, sigma_x, Ai, yi, rng.split()))
 
-        sigma_x = DPLR((d ** 2 + epsilon) * jnp.ones(features), U, U.T)
-        sigma_Ax = lambda v: A(sigma_x @ At(v)) + sigma_y * v
+            x = jnp.concatenate(x, axis=0)
+        else:
+            x = sample(mu_x, sigma_x, A, y, rng.split())
 
-        loss = jnp.sum(sigma_Ax(z) ** 2, axis=-1) - 2 * jnp.einsum('...i,...i', bias, sigma_Ax(bias))
+        # Maximization
+        mu_x, sigma_x = ppca(x, rank=rank, key=rng.split())
 
-        return jnp.mean(loss)
-
-    params = (
-        jnp.ones(()),
-        rng.normal((features, rank)) * 1e-2,
-    )
-
-    optimizer = optax.adam(learning_rate=learning_rate)
-    opt_state = optimizer.init(params)
-
-    def update(state, key):
-        params, opt_state = state
-
-        loss, grads = jax.value_and_grad(objective)(params, jax.random.normal(key, y.shape))
-        updates, opt_state = optimizer.update(grads, opt_state, params)
-        params = optax.apply_updates(params, updates)
-
-        return (params, opt_state), loss
-
-    (params, opt_state), losses = jax.lax.scan(
-        f=update,
-        init=(params, opt_state),
-        xs=rng.split(epochs),
-    )
-
-    d, U = params
-    sigma_x = DPLR((d ** 2 + epsilon) * jnp.ones(features), U, U.T)
-
-    return mu_x, sigma_x, losses
+    return mu_x, sigma_x

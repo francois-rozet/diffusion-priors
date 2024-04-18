@@ -332,11 +332,11 @@ class PosteriorDenoiser(nn.Module):
             v, = vjp(u)
 
             gamma = jnp.linalg.norm(v, axis=-1) / jnp.linalg.norm(u, axis=-1)
-            gamma = jnp.broadcast_to(gamma[..., None], x.shape)
+            gamma = gamma[..., None]
 
             sigma_x_xt = sigma_t * DPLR(gamma)
         else:
-            sigma_x_xt = sigma_t + (-sigma_t) * (self.sigma_x + sigma_t).inv * sigma_t
+            sigma_x_xt = sigma_t + (-sigma_t**2) * (self.sigma_x + sigma_t).inv
 
         def sigma_y_xt(v):
             return self.sigma_y @ v + A(sigma_x_xt @ At(v))

@@ -62,10 +62,8 @@ def sample(model, y, A, key):
 
     z = jax.random.normal(key, flatten(y).shape)
     x = z * sampler.sde.sigma(1.0)
-
     x = sampler(x, steps=64, key=key)
     x = unflatten(x, 32, 32)
-    x = np.asarray(x)
 
     return x
 
@@ -74,6 +72,7 @@ def generate(model, dataset, rng, batch_size):
     def transform(batch):
         y, A = batch['y'], batch['A']
         x = sample(model, y, A, rng.split())
+        x = np.asarray(x)
 
         return {'x': x}
 
@@ -113,7 +112,7 @@ def train():
     y_fit, A_fit = trainset_yA[:16384]['y'], trainset_yA[:16384]['A']
     y_eval, A_eval = testset_yA[:16]['y'], testset_yA[:16]['A']
 
-    mu_x, sigma_x, _ = fit_moments(
+    mu_x, sigma_x = fit_moments(
         features=32 * 32 * 3,
         rank=64,
         A=inox.Partial(measure, A_fit),

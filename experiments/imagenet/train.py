@@ -61,10 +61,8 @@ def sample(model, y, A, key):
 
     z = jax.random.normal(key, flatten(y).shape)
     x = z * sampler.sde.sigma(1.0)
-
     x = sampler(x, steps=64, key=key)
     x = unflatten(x, 64, 64)
-    x = np.asarray(x)
 
     return x
 
@@ -74,6 +72,7 @@ def generate(model, dataset, rng, batch_size, sharding=None):
         y, A = batch['y'], batch['A']
         y, A = jax.device_put((y, A), sharding)
         x = sample(model, y, A, rng.split())
+        x = np.asarray(x)
 
         return {'x': x}
 
@@ -129,7 +128,7 @@ def train(runid: int, lap: int):
         y_fit, A_fit = dataset[:16384]['y'], dataset[:16384]['A']
         y_fit, A_fit = jax.device_put((y_fit, A_fit), distributed)
 
-        mu_x, sigma_x, _ = fit_moments(
+        mu_x, sigma_x = fit_moments(
             features=64 * 64 * 3,
             rank=64,
             A=inox.Partial(measure, A_fit),
@@ -151,7 +150,6 @@ def train(runid: int, lap: int):
     model.train(True)
 
     static, params, others = model.partition(nn.Parameter)
-    start = params
 
     # Objective
     objective = DenoiserLoss()
@@ -166,7 +164,7 @@ def train(runid: int, lap: int):
     avrg = params
 
     # Training
-    start, avrg, params, others, opt_state = jax.device_put((start, avrg, params, others, opt_state), replicated)
+    avrg, params, others, opt_state = jax.device_put((avrg, params, others, opt_state), replicated)
 
     def ell(params, others, x, key):
         keys = jax.random.split(key, 3)
