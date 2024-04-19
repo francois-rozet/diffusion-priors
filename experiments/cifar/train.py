@@ -124,11 +124,11 @@ def train(runid: int, lap: int):
     arrays = jax.device_put(arrays, replicated)
     previous = static(arrays)
 
-    trainset_x = generate(previous, trainset_yA, rng, config.batch_size, distributed)
-    testset_x = generate(previous, testset_yA, rng, config.batch_size, distributed)
+    trainset = generate(previous, trainset_yA, rng, config.batch_size, distributed)
+    testset = generate(previous, testset_yA, rng, config.batch_size, distributed)
 
     ## Moments
-    x_fit = trainset_x[:16384]['x']
+    x_fit = trainset[:16384]['x']
     x_fit = flatten(x_fit)
 
     mu_x = jnp.mean(x_fit, axis=0)
@@ -191,7 +191,7 @@ def train(runid: int, lap: int):
 
     for epoch in (bar := trange(config.epochs, ncols=88)):
         loader = (
-            trainset_x
+            trainset
             .shuffle(seed=seed + lap * config.epochs + epoch)
             .iter(batch_size=config.batch_size, drop_last_batch=True)
         )
@@ -211,7 +211,7 @@ def train(runid: int, lap: int):
 
         ## Validation
         loader = (
-            testset_x
+            testset
             .iter(batch_size=config.batch_size, drop_last_batch=True)
         )
 

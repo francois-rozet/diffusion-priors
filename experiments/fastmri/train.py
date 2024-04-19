@@ -90,16 +90,19 @@ def train(runid: int, lap: int):
     # Data
     dataset = load_from_disk(PATH / 'hf/fastmri-kspace')
     dataset.set_format('numpy')
-    dataset = concatenate_datasets([dataset] * config.duplicate)
 
-    y_eval, A_eval = dataset[:1024:256]['y'], dataset[:1024:256]['A']
+    trainset_yA = dataset['train']
+    trainset_yA = concatenate_datasets([trainset_yA] * config.duplicate)
+    testset_yA = dataset['val']
+
+    y_eval, A_eval = testset_yA[:1024:256]['y'], testset_yA[:1024:256]['A']
     y_eval, A_eval = jax.device_put((y_eval, A_eval), distributed)
 
     # Previous
     if lap > 0:
         previous = load_module(runpath / f'checkpoint_{lap - 1}.pkl')
     else:
-        y_fit, A_fit = dataset[:16384:4]['y'], dataset[:16384:4]['A']
+        y_fit, A_fit = trainset_yA[:16384:4]['y'], trainset_yA[:16384:4]['A']
         y_fit, A_fit = jax.device_put((y_fit, A_fit), distributed)
 
         mu_x, sigma_x = fit_moments(
@@ -123,7 +126,8 @@ def train(runid: int, lap: int):
     arrays = jax.device_put(arrays, replicated)
     previous = static(arrays)
 
-    trainset = generate(previous, dataset, rng, config.batch_size, distributed)
+    trainset = generate(previous, trainset_yA, rng, config.batch_size, distributed)
+    testset = generate(previous, testset_yA, rng, config.batch_size, distributed)
 
     ## Moments
     x_fit = trainset[:16384]['x']
@@ -169,6 +173,7 @@ def train(runid: int, lap: int):
 
         return x
 
+    @jax.jit
     def ell(params, others, x, key):
         keys = jax.random.split(key, 3)
 
@@ -206,7 +211,25 @@ def train(runid: int, lap: int):
 
         loss_train = np.stack(losses).mean()
 
-        bar.set_postfix(loss=loss_train)
+        ## Validation
+        loader = (
+            testset
+            .iter(batch_size=config.batch_size, drop_last_batch=True)
+        )
+
+        losses = []
+
+        for batch in prefetch(loader):
+            x = batch['x']
+            x = jax.device_put(x, distributed)
+            x = flatten(x)
+
+            loss = ell(avrg, others, x, key=rng.split())
+            losses.append(loss)
+
+        loss_val = np.stack(losses).mean()
+
+        bar.set_postfix(loss=loss_train, loss_val=loss_val)
 
         ## Eval
         if (epoch + 1) % 16 == 0:
@@ -218,11 +241,13 @@ def train(runid: int, lap: int):
 
             run.log({
                 'loss': loss_train,
+                'loss_val': loss_val,
                 'samples': wandb.Image(to_pil(x)),
             })
         else:
             run.log({
                 'loss': loss_train,
+                'loss_val': loss_val,
             })
 
     ## Checkpoint

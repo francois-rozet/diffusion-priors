@@ -4,8 +4,9 @@ import h5py
 import io
 import tarfile
 
-from datasets import load_from_disk, Array3D, Dataset, Features
+from datasets import load_from_disk, Array3D, Dataset, DatasetDict, Features
 from dawgz import job, after, ensure, schedule
+from functools import partial
 
 from utils import *
 
@@ -13,8 +14,8 @@ from utils import *
 @ensure(lambda: (PATH / 'hf/fastmri').is_dir())
 @job(cpus=4, ram='64GB', time='06:00:00')
 def export():
-    def gen():
-        with tarfile.open(PATH / 'knee_singlecoil_train.tar.xz', mode='r|xz') as tarball:
+    def gen(split: str):
+        with tarfile.open(PATH / f'knee_singlecoil_{split}.tar.xz', mode='r|xz') as tarball:
             for member in tarball:
                 if not member.name.endswith('.h5'):
                     continue
@@ -23,7 +24,7 @@ def export():
                 file = io.BytesIO(file)
 
                 with h5py.File(file) as mri:
-                    slices = mri['reconstruction_rss'][10:40]
+                    slices = mri['reconstruction_rss'][10:41]
                     slices = slices / slices.max()  # in [0, 1]
                     slices = 4 * slices - 2         # in [-2, 2]
                     slices = slices[..., None]
@@ -33,11 +34,14 @@ def export():
 
     types = {'x': Array3D(shape=(320, 320, 1), dtype='float32')}
 
-    dataset = Dataset.from_generator(
-        gen,
-        features=Features(types),
-        cache_dir=PATH / 'hf/temp',
-    )
+    dataset = DatasetDict()
+
+    for split in ('train', 'val'):
+        dataset[split] = Dataset.from_generator(
+            partial(gen, split=split),
+            features=Features(types),
+            cache_dir=PATH / 'hf/temp',
+        )
 
     dataset.save_to_disk(PATH / 'hf/fastmri')
     dataset.cleanup_cache_files()
