@@ -16,6 +16,7 @@ dependencies:
     - matplotlib==3.8.2
     - nvidia-cudnn-cu11~=8.9
     - optax==0.1.7
+    - POT==0.9.3
     - scipy==1.12.0
     - tqdm==4.66.1
     - wandb==0.16.2

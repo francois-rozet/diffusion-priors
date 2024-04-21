@@ -125,8 +125,12 @@ def ppca(x: Array, key: Array, rank: int = 1) -> Tuple[Array, DPLR]:
         Q = x.T @ Q
         Q = Q / jnp.linalg.norm(Q, axis=0)
 
-    D = (jnp.trace(C) - jnp.sum(L)) / (features - rank)
-    U = Q * jnp.sqrt(L - D)
+    if rank < features:
+        D = (jnp.trace(C) - jnp.sum(L)) / (features - rank)
+    else:
+        D = jnp.asarray(1e-6)
+
+    U = Q * jnp.sqrt(jnp.maximum(L - D, 0.0))
 
     sigma_x = DPLR(D * jnp.ones(features), U, U.T)
 
