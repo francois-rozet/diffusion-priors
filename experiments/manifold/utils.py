@@ -5,6 +5,8 @@ import math
 import matplotlib.pyplot as plt
 import os
 import ot
+import pandas as pd
+import seaborn as sb
 
 from functools import partial
 from jax import Array
@@ -53,18 +55,16 @@ def show(x: Array, zoom: int = 2, **kwargs) -> Image.Image:
     return img
 
 
-def corner(x: Array, pad: int = 4, **kwargs) -> Image.Image:
-    m, n = x.shape
+def corner(x: Array, **kwargs) -> plt.Figure:
+    sb.set_palette(sb.color_palette('deep'))
 
-    images = [
-        [
-            show(x[:, i:j+1:j-i], **kwargs) if i < j else None
-            for j in range(1, n)
-        ]
-        for i in range(n - 1)
-    ]
-
-    return collate(images, pad=pad)
+    return sb.pairplot(
+        data=pd.DataFrame(np.asarray(x)),
+        corner=True,
+        kind='hist',
+        plot_kws={'bins': 64, 'binrange': (-3, 3)},
+        diag_kws={'bins': 64, 'binrange': (-3, 3), 'element': 'step'},
+    )
 
 
 def sinkhorn_divergence(
