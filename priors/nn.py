@@ -211,6 +211,7 @@ class UNet(nn.Module):
 
                     up.append(
                         nn.Sequential(
+                            nn.LayerNorm(),
                             nn.Resample(factor=stride, method='nearest'),
                             nn.Conv(hid_channels[i], hid_channels[i - 1], **kwargs),
                         )
