@@ -97,14 +97,14 @@ def evaluate(**config):
         E_x_xt = xt + sigma_t**2 * J
         E_y_xt = A(E_x_xt)
 
-        if config.method == 'zero':
+        if config.heuristic == 'zero':
             V_x_xt = 0.0 * jnp.eye(config.n)
-        elif config.method == 'sigma_t':
+        elif config.heuristic == 'sigma_t':
             V_x_xt = sigma_t**2 * jnp.eye(config.n)
         else:
-            if config.method == 'sigma_x':
+            if config.heuristic == 'sigma_x':
                 H = -jnp.linalg.inv(sigma_x + sigma_t**2 * jnp.eye(config.n))
-            elif config.method == 'hessian':
+            elif config.heuristic == 'hessian':
                 H = jnp.vectorize(jax.hessian(log_prior), signature='(n),()->(n,n)')(xt, sigma_t)
 
             V_x_xt = sigma_t**2 * jnp.eye(config.n) + sigma_t ** 4 * H
@@ -141,16 +141,16 @@ if __name__ == '__main__':
     jobs = []
 
     for seed in range(64):
-        for method in ('zero', 'sigma_t', 'sigma_x', 'hessian'):
+        for heuristic in ('zero', 'sigma_t', 'sigma_x', 'hessian'):
             jobs.append(
                 job(
                     partial(
                         evaluate,
-                        method=method,
+                        heuristic=heuristic,
                         seed=seed,
                         **CONFIG,
                     ),
-                    name=f'eval_{seed}_{method}',
+                    name=f'eval_{seed}_{heuristic}',
                     cpus=4,
                     gpus=1,
                     ram='16GB',

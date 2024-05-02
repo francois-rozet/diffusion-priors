@@ -24,6 +24,10 @@ CONFIG = {
     'emb_features': 256,
     'heads': {2: 4},
     'dropout': 0.1,
+    # Sampling
+    'heuristic': None,
+    'discrete': 64,
+    'maxiter': 5,
     # Training
     'laps': 16,
     'epochs': 256,
@@ -39,11 +43,11 @@ CONFIG = {
 }
 
 
-def generate(model, dataset, rng, batch_size, sharding=None):
+def generate(model, dataset, rng, batch_size, sharding=None, **kwargs):
     def transform(batch):
         y, A = batch['y'], batch['A']
         y, A = jax.device_put((y, A), sharding)
-        x = sample(model, y, A, rng.split())
+        x = sample(model, y, A, rng.split(), **kwargs)
         x = np.asarray(x)
 
         return {'x': x}
@@ -124,14 +128,14 @@ def train(runid: int, lap: int):
     arrays = jax.device_put(arrays, replicated)
     previous = static(arrays)
 
-    trainset = generate(previous, trainset_yA, rng, config.batch_size, distributed)
-    testset = generate(previous, testset_yA, rng, config.batch_size, distributed)
+    trainset = generate(previous, trainset_yA, rng, config.batch_size, distributed, steps=config.discrete, maxiter=config.maxiter)
+    testset = generate(previous, testset_yA, rng, config.batch_size, distributed, steps=config.discrete, maxiter=config.maxiter)
 
     ## Moments
     x_fit = trainset[:16384]['x']
     x_fit = flatten(x_fit)
 
-    mu_x = jnp.mean(x_fit, axis=0)
+    mu_x, sigma_x = ppca(x_fit, rank=64, key=rng.split())
 
     del x_fit
 
@@ -142,6 +146,16 @@ def train(runid: int, lap: int):
         model = make_model(key=rng.split(), **config)
 
     model.mu_x = mu_x
+
+    if config.heuristic == 'zeros':
+        model.sigma_x = jnp.zeros_like(mu_x)
+    elif config.heuristic == 'ones':
+        model.sigma_x = jnp.ones_like(mu_x)
+    elif config.heuristic == 'sigma_t':
+        model.sigma_x = jnp.ones_like(mu_x) * 1e6
+    elif config.heuristic == 'sigma_x':
+        model.sigma_x = sigma_x
+
     model.train(True)
 
     static, params, others = model.partition(nn.Parameter)
