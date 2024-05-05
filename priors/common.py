@@ -190,6 +190,7 @@ def sample_any(
     steps: int = 64,
     rtol: float = 1e-3,
     maxiter: int = 5,
+    verbose: bool = False,
     **kwargs,
 ) -> Array:
     r"""Samples from :math:`q(x)` or :math:`q(x | A, y)`."""
@@ -208,6 +209,7 @@ def sample_any(
             sigma_x=sigma_x,
             rtol=rtol,
             maxiter=maxiter,
+            verbose=verbose,
         )
 
     if sampler == 'ddpm':

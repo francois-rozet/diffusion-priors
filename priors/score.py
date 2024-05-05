@@ -294,6 +294,7 @@ class PosteriorDenoiser(nn.Module):
         sde: VESDE = None,
         rtol: float = 1e-3,
         maxiter: int = None,
+        verbose: bool = False,
     ):
         super().__init__()
 
@@ -317,6 +318,7 @@ class PosteriorDenoiser(nn.Module):
 
         self.rtol = rtol
         self.maxiter = maxiter
+        self.verbose = verbose
 
     @inox.jit
     def __call__(self, xt: Array, t: Array, key: Array = None) -> Array:
@@ -336,12 +338,16 @@ class PosteriorDenoiser(nn.Module):
             def sigma_y_xt(v):
                 return self.sigma_y @ v + A(sigma_x_xt @ At(v))
 
+        b = self.y - y
         v, _ = jax.scipy.sparse.linalg.cg(
             A=sigma_y_xt,
-            b=self.y - y,
+            b=b,
             tol=self.rtol,
             maxiter=self.maxiter,
         )
+
+        if self.verbose:
+            jax.debug.print('{},{}', t, jnp.linalg.norm(sigma_y_xt(v) - b))
 
         score, = vjp(At(v))
 
