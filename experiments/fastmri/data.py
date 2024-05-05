@@ -56,9 +56,7 @@ def corrupt():
         x = row['x']
         y = complex2real(fft2c(x))
 
-        A = np.random.uniform(size=(1, 320, 1)) < 0.1
-        A[:, 150:170] = True
-
+        A = make_mask(r=6)
         y = np.random.normal(loc=A * y, scale=1e-2)
 
         return {'A': A, 'y': y}

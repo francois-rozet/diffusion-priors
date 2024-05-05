@@ -59,6 +59,26 @@ def ifft2c(k: Array, norm: str = 'ortho') -> Array:
     )
 
 
+def make_mask(r: int = 4, key: Array = None) -> Array:
+    r"""Creates an horizontal frequency subsampling mask.
+
+    References:
+        | Robust Compressed Sensing MRI with Deep Generative Priors
+        | https://arxiv.org/abs/2108.01368
+    """
+
+    if key is None:
+        A = np.random.uniform(size=(1, 320, 1))
+        A = jnp.asarray(A)
+    else:
+        A = jax.random.uniform(key, shape=(1, 320, 1))
+
+    A = A < 200 / (320 * r - 120)
+    A = A.at[:, 160 - math.ceil(60 / r) : 160 + math.ceil(60 / r)].set(True)
+
+    return A
+
+
 def measure(A: Array, x: Array, shard: bool = False) -> Array:
     def f(A: Array, x: Array) -> Array:
         x = unflatten(x, 320, 320)

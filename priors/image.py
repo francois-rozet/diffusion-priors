@@ -1,5 +1,6 @@
 r"""Image helpers"""
 
+import dm_pix as pix
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -102,3 +103,11 @@ def rand_shake(x: Array, key: Array, delta: int = 1, mode: str = 'reflect') -> A
         start_indices=i,
         slice_sizes=x.shape,
     )
+
+
+def psnr(a: Array, b: Array) -> Array:
+    return pix.psnr((a + 2) / 4, (b + 2) / 4)
+
+
+def ssim(a: Array, b: Array) -> Array:
+    return pix.ssim((a + 2) / 4, (b + 2) / 4)
