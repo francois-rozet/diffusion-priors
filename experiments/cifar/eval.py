@@ -48,7 +48,7 @@ class ZipDataset(data.Dataset):
                 file.writestr(f'IMG_{i}.png', buffer.getvalue())
 
 
-def generate(checkpoint: Path, archive: Path, seed: int = None):
+def generate(checkpoint: Path, archive: Path, prior: bool = False, seed: int = None):
     # Sharding
     jax.config.update('jax_threefry_partitionable', True)
 
@@ -71,52 +71,71 @@ def generate(checkpoint: Path, archive: Path, seed: int = None):
     arrays = jax.device_put(arrays, replicated)
     model = static(arrays)
 
-    # Generate
-    loader = dataset['train'].iter(batch_size=256)
+    # Setting
+    if getattr(model, 'sigma_x', None) is None:
+        kwargs = {'steps': 64, 'maxiter': 5}
+    else:
+        kwargs = {'steps': 256, 'maxiter': None}
 
+    # Generate
     images = []
 
-    for batch in tqdm(loader):
-        y, A = batch['y'], batch['A']
-        y, A = jax.device_put((y, A), distributed)
-        x = sample(model, y, A, rng.split())
-        x = np.asarray(x)
+    if prior:
+        for _ in range(0, 50000, 256):
+            x = sample_any(model, (256, 32 * 32 * 3), key=rng.split(), sampler='ddim', steps=64)
+            x = unflatten(x, 32, 32)
+            x = np.asarray(x)
 
-        for img in map(to_pil, x):
-            images.append(img)
+            for img in map(to_pil, x):
+                images.append(img)
+    else:
+        loader = dataset['train'].iter(batch_size=256)
+
+        for batch in tqdm(loader):
+            y, A = batch['y'], batch['A']
+            y, A = jax.device_put((y, A), distributed)
+            x = sample(model, y, A, rng.split(), **kwargs)
+            x = np.asarray(x)
+
+            for img in map(to_pil, x):
+                images.append(img)
 
     # Archive
     ZipDataset.zip(archive, images)
 
 
-def fid(archive: Path):
-    results = calculate_metrics(
+def fid(archive: Path, run: str, lap: int, prior: bool, seed: int):
+    stats = calculate_metrics(
         input1=ZipDataset(archive),
         input2='cifar10-train',
         fid=True,
         isc=True,
     )
 
-    for key, value in results.items():
-        print(key, ':', value, flush=True)
+    fid = stats['frechet_inception_distance']
+    isc = stats['inception_score_mean']
+
+    with open(PATH / f'statistics.csv', mode='a') as f:
+        f.write(f'{run},{lap},{prior},{seed},{fid},{isc}\n')
 
 
 if __name__ == '__main__':
     run = 'daily-dew-78_f0cmqr99'
     runpath = PATH / f'runs/{run}'
-    seed = random.randrange(256)
+    prior = False
+    seed = 0
 
     jobs = []
 
     for lap in range(16):
         checkpoint = runpath / f'checkpoint_{lap}.pkl'
-        archive = runpath / f'archive_{lap}.zip'
+        archive = runpath / f'archive_{lap}_{prior}_{seed}.zip'
 
         if not checkpoint.exists():
             break
 
         a = job(
-            partial(generate, checkpoint, archive, seed),
+            partial(generate, checkpoint, archive, prior, seed),
             name=f'generate_{lap}',
             cpus=4,
             gpus=4,
@@ -126,7 +145,7 @@ if __name__ == '__main__':
         )
 
         b = job(
-            partial(fid, archive),
+            partial(fid, archive, run, lap, prior, seed),
             name=f'fid_{lap}',
             cpus=4,
             gpus=1,

@@ -248,7 +248,7 @@ def train(runid: int, lap: int):
             model = static(avrg, others)
             model.train(False)
 
-            x = sample(model, y_eval, A_eval, rng.split())
+            x = sample(model, y_eval, A_eval, rng.split(), steps=config.discrete, maxiter=config.maxiter)
             x = x.reshape(4, 4, 32, 32, 3)
 
             run.log({
