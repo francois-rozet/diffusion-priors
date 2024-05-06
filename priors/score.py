@@ -293,7 +293,8 @@ class PosteriorDenoiser(nn.Module):
         sigma_x: Union[Array, DPLR] = None,
         sde: VESDE = None,
         rtol: float = 1e-3,
-        maxiter: int = None,
+        maxiter: int = 1,
+        method: str = 'cg',
         verbose: bool = False,
     ):
         super().__init__()
@@ -318,6 +319,12 @@ class PosteriorDenoiser(nn.Module):
 
         self.rtol = rtol
         self.maxiter = maxiter
+
+        if method == 'cg':
+            self.solve = jax.scipy.sparse.linalg.cg
+        elif method == 'bicgstab':
+            self.solve = jax.scipy.sparse.linalg.bicgstab
+
         self.verbose = verbose
 
     @inox.jit
@@ -339,7 +346,7 @@ class PosteriorDenoiser(nn.Module):
                 return self.sigma_y @ v + A(sigma_x_xt @ At(v))
 
         b = self.y - y
-        v, _ = jax.scipy.sparse.linalg.cg(
+        v, _ = self.solve(
             A=sigma_y_xt,
             b=b,
             tol=self.rtol,

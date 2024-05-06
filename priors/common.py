@@ -189,7 +189,8 @@ def sample_any(
     sampler: str = 'ddpm',
     steps: int = 64,
     rtol: float = 1e-3,
-    maxiter: int = 5,
+    maxiter: int = 1,
+    method: str = 'cg',
     verbose: bool = False,
     **kwargs,
 ) -> Array:
@@ -209,6 +210,7 @@ def sample_any(
             sigma_x=sigma_x,
             rtol=rtol,
             maxiter=maxiter,
+            method=method,
             verbose=verbose,
         )
 
