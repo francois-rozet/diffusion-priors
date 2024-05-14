@@ -26,10 +26,9 @@ CONFIG = {
     'dropout': 0.1,
     # Sampling
     'heuristic': None,
-    'discrete': 64,
-    'maxiter': 5,
+    'discrete': 256,
+    'maxiter': 1,
     # Training
-    'laps': 16,
     'epochs': 256,
     'batch_size': 256,
     'scheduler': 'constant',
@@ -274,7 +273,7 @@ if __name__ == '__main__':
 
     jobs = []
 
-    for lap in range(CONFIG.get('laps')):
+    for lap in range(32):
         jobs.append(
             job(
                 partial(train, runid=runid, lap=lap),
@@ -287,8 +286,8 @@ if __name__ == '__main__':
             )
         )
 
-        if lap > 0:
-            jobs[lap].after(jobs[lap - 1])
+        if len(jobs) > 1:
+            jobs[-1].after(jobs[-2])
 
     schedule(
         *jobs,
