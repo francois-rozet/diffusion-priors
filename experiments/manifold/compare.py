@@ -68,7 +68,7 @@ def evaluate(**config):
 
     sigma_x = jnp.cov(p_x.mT)
 
-    prior = corner(p_x)
+    prior = show_corner(p_x)
     prior.save(runpath / f'prior.png')
 
     run.log({
@@ -80,7 +80,7 @@ def evaluate(**config):
 
     p_x_y = rng.choice(p_x, (config.samples,), p=jnp.exp(log_p_y_x))
 
-    posterior = corner(p_x_y)
+    posterior = show_corner(p_x_y)
     posterior.save(runpath / f'posterior.png')
 
     # Noisy posterior(s)
@@ -132,7 +132,7 @@ def evaluate(**config):
 
         run.log({
             'sigma': sigma_t,
-            'posterior': wandb.Image(corner(q_xt_y)),
+            'posterior': wandb.Image(show_corner(q_xt_y)),
             'divergence': divergence,
         })
 

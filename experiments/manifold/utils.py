@@ -28,42 +28,41 @@ else:
 PATH.mkdir(parents=True, exist_ok=True)
 
 
-def show(x: Array, zoom: int = 2, **kwargs) -> Image.Image:
-    kwargs.setdefault('bins', 128)
-    kwargs.setdefault('range', ((-3.0, 3.0), (-3.0, 3.0)))
-
-    # Histogram
-    p, _, _ = jnp.histogram2d(x[:, 0], x[:, 1], **kwargs)
-
-    # Color map
-    cmap = plt.get_cmap('magma')
-    cmap = plt.cm.ScalarMappable(cmap=cmap)
-    cmap.set_clim(vmin=0)
-
-    # Image
-    p = np.asarray(p)
-    if np.any(p > 0):
-        p = p / np.sum(p)
-    p = p ** 0.5
-
-    img = cmap.to_rgba(p, bytes=True)
-    img = Image.fromarray(img)
-
-    if zoom > 1:
-        img = img.resize((img.height * zoom, img.width * zoom), Image.NEAREST)
-
-    return img
+def measure(A: Array, x: Array) -> Array:
+    return jnp.einsum('...ij,...j', A, x)
 
 
-def corner(x: Array, **kwargs) -> plt.Figure:
-    sb.set_palette(sb.color_palette('deep'))
+def show_pair(y: Array, cmap: str = 'Blues', **kwargs) -> plt.Figure:
+    cmap = plt.get_cmap(cmap)
+    colors = [cmap(i) for i in range(16, cmap.N)]
+    colors = [(1.0, 1.0, 1.0), *colors]
+    cmap = plt.cm.colors.ListedColormap(colors)
+
+    return sb.histplot(
+        data=pd.DataFrame({'$y_0$': y[:, 0], '$y_1$': y[:, 1]}),
+        x='$y_0$',
+        y='$y_1$',
+        bins=64,
+        binrange=(-3, 3),
+        thresh=None,
+        cmap=cmap,
+        **kwargs,
+    )
+
+
+def show_corner(x: Array, cmap: str = 'Blues', **kwargs) -> plt.Figure:
+    cmap = plt.get_cmap(cmap)
+    colors = [cmap(i) for i in range(16, cmap.N)]
+    colors = [(1.0, 1.0, 1.0), *colors]
+    cmap = plt.cm.colors.ListedColormap(colors)
 
     return sb.pairplot(
-        data=pd.DataFrame(np.asarray(x)),
+        data=pd.DataFrame({f'$x_{i}$': xi for i, xi in enumerate(np.asarray(x).T)}),
         corner=True,
         kind='hist',
-        plot_kws={'bins': 64, 'binrange': (-3, 3)},
-        diag_kws={'bins': 64, 'binrange': (-3, 3), 'element': 'step'},
+        plot_kws={'bins': 64, 'binrange': (-3, 3), 'thresh': None, 'cmap': cmap},
+        diag_kws={'bins': 64, 'binrange': (-3, 3), 'element': 'step', 'color': cmap(cmap.N // 2)},
+        **kwargs,
     )
 
 
@@ -134,7 +133,7 @@ def make_model(
     key: Array,
     features: int,
     hid_features: Sequence[int] = (256, 256, 256),
-    emb_features: int = 256,
+    emb_features: int = 64,
     normalize: bool = True,
     **absorb,
 ) -> Denoiser:
