@@ -25,6 +25,7 @@ CONFIG = {
     'heads': {3: 4},
     'dropout': 0.1,
     # Sampling
+    'sampler': 'ddpm',
     'heuristic': None,
     'discrete': 64,
     'maxiter': 3,
@@ -129,8 +130,8 @@ def train(runid: int, lap: int):
     arrays = jax.device_put(arrays, replicated)
     previous = static(arrays)
 
-    trainset = generate(previous, trainset_yA, rng, config.batch_size, distributed, steps=config.discrete, maxiter=config.maxiter)
-    testset = generate(previous, testset_yA, rng, config.batch_size, distributed, steps=config.discrete, maxiter=config.maxiter)
+    trainset = generate(previous, trainset_yA, rng, config.batch_size, distributed, sampler=config.sampler, steps=config.discrete, maxiter=config.maxiter)
+    testset = generate(previous, testset_yA, rng, config.batch_size, distributed, sampler=config.sampler, steps=config.discrete, maxiter=config.maxiter)
 
     ## Moments
     x_fit = trainset[:16384]['x']
@@ -250,7 +251,7 @@ def train(runid: int, lap: int):
             model = static(avrg, others)
             model.train(False)
 
-            x = sample(model, y_eval, A_eval, rng.split())
+            x = sample(model, y_eval, A_eval, rng.split(), sampler=config.sampler, steps=config.discrete, maxiter=config.maxiter)
             x = x.reshape(2, 2, 320, 320, 1)
 
             run.log({

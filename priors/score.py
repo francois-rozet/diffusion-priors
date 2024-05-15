@@ -110,7 +110,7 @@ class PredictorCorrector(DDPM):
         tau: The LMC step size.
     """
 
-    def __init__(self, model: nn.Module, corrections: int = 1, tau: Array = 1e-2, **kwargs):
+    def __init__(self, model: nn.Module, corrections: int = 1, tau: Array = 1e-1, **kwargs):
         super().__init__(model, **kwargs)
 
         self.corrections = corrections
