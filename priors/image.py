@@ -7,6 +7,7 @@ import numpy as np
 
 from einops import rearrange
 from jax import Array
+from pathlib import Path
 from PIL import Image
 from typing import *
 
@@ -26,11 +27,18 @@ def from_pil(img: Image.Image) -> Array:
     return x
 
 
-def to_pil(x: Array, zoom: int = 1) -> Image.Image:
+def to_pil(
+    x: Array,
+    pad: int = 0,
+    background: int = 255,
+    zoom: int = 1,
+    file: Union[str, Path] = None,
+) -> Image.Image:
     x = np.asarray(x)
     x = np.clip((x + 2) * (256 / 4), 0, 255)
     x = x.astype(np.uint8)
     x = np.tile(x, (1, 1, 1, 1, 1))
+    x = np.pad(x, pad_width=((0, 0), (0, 0), (pad, pad), (pad, pad), (0, 0)), constant_values=background)
     x = rearrange(x, 'M N H W C -> (M H) (N W) C')
 
     if x.shape[-1] == 1:
@@ -41,13 +49,17 @@ def to_pil(x: Array, zoom: int = 1) -> Image.Image:
     if zoom > 1:
         x = x.resize((zoom * x.width, zoom * x.height), Image.NEAREST)
 
+    if file is not None:
+        x.save(file)
+
     return x
 
 
 def collate(
     images: List[List[Image.Image]],
-    pad: int = 4,
-    background: Tuple[int, int, int] = (255, 255, 255),
+    pad: int = 0,
+    background: int = 255,
+    file: Union[str, Path] = None,
 ) -> Image.Image:
     M, N = len(images), max(map(len, images))
 
@@ -78,6 +90,9 @@ def collate(
                 canvas.paste(images[i][j], offset)
             except:
                 continue
+
+    if file is not None:
+        canvas.save(file)
 
     return canvas
 
