@@ -14,10 +14,12 @@ def download():
 @after(download)
 @job(cpus=4, ram='64GB', time='06:00:00')
 def corrupt():
+    corruption = 75
+
     def transform(row):
         x = from_pil(row['img'])
         x = x + 4 / 256 * np.random.uniform(size=x.shape)  # dequantize
-        A = np.random.uniform(size=(32, 32, 1)) < 0.25
+        A = np.random.uniform(size=(32, 32, 1)) > corruption / 100
         y = np.random.normal(loc=A * x, scale=1e-3)
 
         return {'A': A, 'y': y}
@@ -36,7 +38,7 @@ def corrupt():
         num_proc=4,
     )
 
-    dataset.save_to_disk(PATH / 'hf/cifar-mask')
+    dataset.save_to_disk(PATH / f'hf/cifar-mask-{corruption}')
 
 
 if __name__ == '__main__':

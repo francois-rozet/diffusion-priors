@@ -24,6 +24,8 @@ CONFIG = {
     'emb_features': 256,
     'heads': {2: 4},
     'dropout': 0.1,
+    # Data
+    'corruption': 75,
     # Sampling
     'sampler': 'ddpm',
     'heuristic': None,
@@ -91,7 +93,7 @@ def train(runid: int, lap: int):
     rng = inox.random.PRNG(seed)
 
     # Data
-    dataset = load_from_disk(PATH / 'hf/cifar-mask')
+    dataset = load_from_disk(PATH / f'hf/cifar-mask-{config.corruption}')
     dataset.set_format('numpy')
 
     trainset_yA = dataset['train']
