@@ -297,6 +297,6 @@ if __name__ == '__main__':
         name=f'Training {runid}',
         backend='slurm',
         export='ALL',
-        account='ariacpg',
+        account='anonymous',
         env=['export WANDB_SILENT=true'],
     )

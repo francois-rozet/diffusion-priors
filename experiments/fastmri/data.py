@@ -86,5 +86,5 @@ if __name__ == '__main__':
         backend='slurm',
         prune=True,
         export='ALL',
-        account='ariacpg',
+        account='anonymous',
     )
