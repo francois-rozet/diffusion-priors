@@ -146,7 +146,7 @@ def train(runid: int, lap: int):
     if lap > 0:
         model = previous
     else:
-        model = make_model(key=rng.split(), **config)
+        model = make_model(key=rng.split(), **CONFIG)
 
     model.mu_x = mu_x
 

@@ -114,7 +114,7 @@ def train():
     pi = generate(GaussianDenoiser(mu_x, sigma_x))
 
     # Model
-    model = make_model(key=rng.split(), **config)
+    model = make_model(key=rng.split(), **CONFIG)
     model.mu_x = mu_x
 
     if config.heuristic == 'zeros':
