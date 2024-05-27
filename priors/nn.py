@@ -201,11 +201,14 @@ class UNet(nn.Module):
 
                 if i > 0:
                     do.insert(0,
-                        nn.Conv(
-                            hid_channels[i - 1],
-                            hid_channels[i],
-                            stride=stride,
-                            **kwargs,
+                        nn.Sequential(
+                            nn.Conv(
+                                hid_channels[i - 1],
+                                hid_channels[i],
+                                stride=stride,
+                                **kwargs,
+                            ),
+                            nn.LayerNorm(),
                         )
                     )
 
