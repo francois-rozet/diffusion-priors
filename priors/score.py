@@ -5,6 +5,7 @@ import inox.nn as nn
 import jax
 import jax.numpy as jnp
 import math
+import numpy as np
 
 from jax import Array
 from typing import *
@@ -137,23 +138,33 @@ class PredictorCorrector(DDPM):
 
 
 class NoiseEmbedding(nn.Module):
-    r"""Creates a noise embedding module.
+    r"""Creates a transformer-style noise embedding module.
+
+    References:
+        | Attention Is All You Need (Vaswani et al., 2017)
+        | https://arxiv.org/abs/1706.03762
 
     Arguments:
         features: The number of embedding features.
     """
 
     def __init__(self, features: int):
-        self.anchors = jnp.linspace(math.log(1e-3), math.log(1e2), features)
-        self.scale = jnp.square(features / (math.log(1e2) - math.log(1e-3)))
+        freqs = np.linspace(0, 1, features // 2)
+        freqs = np.pi / 1e4 ** freqs
+
+        self.freqs = jnp.asarray(freqs)
 
     @inox.jit
     def __call__(self, sigma: Array) -> Array:
         x = jnp.log(sigma)
-        x = -self.scale * (x - self.anchors) ** 2
-        x = jax.nn.softmax(x, axis=-1)
 
-        return x
+        return jnp.concatenate(
+            (
+                jnp.sin(self.freqs * x),
+                jnp.cos(self.freqs * x),
+            ),
+            axis=-1,
+        )
 
 
 class Denoiser(nn.Module):
