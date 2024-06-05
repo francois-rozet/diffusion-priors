@@ -36,7 +36,7 @@ def to_pil(
 ) -> Image.Image:
     x = np.asarray(x)
     x = np.clip((x + 2) * (256 / 4), 0, 255)
-    x = x.astype(np.uint8)
+    x = np.rint(x).astype(np.uint8)
     x = np.tile(x, (1, 1, 1, 1, 1))
     x = np.pad(x, pad_width=((0, 0), (0, 0), (pad, pad), (pad, pad), (0, 0)), constant_values=background)
     x = rearrange(x, 'M N H W C -> (M H) (N W) C')
