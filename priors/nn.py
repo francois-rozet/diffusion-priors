@@ -216,12 +216,20 @@ class UNet(nn.Module):
                         nn.Sequential(
                             nn.LayerNorm(),
                             nn.Resample(factor=stride, method='nearest'),
-                            nn.Conv(hid_channels[i], hid_channels[i - 1], **kwargs),
                         )
                     )
                 else:
                     do.insert(0, nn.Conv(in_channels, hid_channels[i], **kwargs))
                     up.append(nn.Linear(hid_channels[i], out_channels))
+
+                if i + 1 < len(hid_blocks):
+                    up.insert(0,
+                        nn.Conv(
+                            hid_channels[i] + hid_channels[i + 1],
+                            hid_channels[i],
+                            **kwargs,
+                        )
+                    )
 
                 self.descent.append(do)
                 self.ascent.insert(0, up)
@@ -248,7 +256,7 @@ class UNet(nn.Module):
                 y = memory.pop()
 
                 if x is not y:
-                    x = x + y
+                    x = jnp.concatenate((x, y), axis=-1)
 
                 for block in blocks:
                     if isinstance(block, (ResBlock, AttBlock)):
