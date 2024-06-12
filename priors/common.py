@@ -15,7 +15,7 @@ from tqdm import tqdm
 from typing import *
 
 from .linalg import *
-from .score import *
+from .diffusion import *
 
 
 def dump_module(module: nn.Module, file: Path):

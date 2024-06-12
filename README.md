@@ -23,7 +23,7 @@ pip install -e .
 
 ### Organization
 
-The [priors](priors) directory contains the implementations of the [neural networks](priors/nn.py), the [diffusion models](priors/score.py) and various [helpers](priors/common.py).
+The [priors](priors) directory contains the implementations of the [neural networks](priors/nn.py), the [diffusion models](priors/diffusion.py) and various [helpers](priors/common.py).
 
 The [manifold](experiments/manifold), [cifar](experiments/cifar) and [fastmri](experiments/fastmri) directories contain the scripts for the experiments (data generation, training and evaluation) as well as the notebooks that produced the figures of the paper. For example,
 

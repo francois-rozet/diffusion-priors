@@ -1,4 +1,4 @@
-r"""Score-based priors"""
+r"""Diffusion priors"""
 
 from . import nn
-from . import score
+from . import diffusion

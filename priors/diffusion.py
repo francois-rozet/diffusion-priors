@@ -1,4 +1,4 @@
-r"""Score helpers"""
+r"""Diffusion helpers"""
 
 import inox
 import inox.nn as nn

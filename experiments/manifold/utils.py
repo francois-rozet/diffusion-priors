@@ -16,7 +16,7 @@ from typing import *
 from priors.common import *
 from priors.image import *
 from priors.nn import *
-from priors.score import *
+from priors.diffusion import *
 
 
 if 'SCRATCH' in os.environ:
