@@ -1,8 +1,9 @@
 #!/usr/bin/env python
 
-from datasets import load_dataset, Array3D, Features
-from dawgz import job, after, schedule
+from datasets import Array3D, Features, load_dataset
+from dawgz import after, job, schedule
 
+# isort: split
 from utils import *
 
 

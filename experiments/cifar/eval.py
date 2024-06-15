@@ -2,18 +2,18 @@
 
 import inox
 import io
-import random
 import zipfile
 
 from dawgz import job, schedule
 from functools import partial
 from torch import Tensor
 from torch.utils import data
-from torchvision.transforms.functional import pil_to_tensor
 from torch_fidelity.fidelity import calculate_metrics
+from torchvision.transforms.functional import pil_to_tensor
 from tqdm import tqdm
 from typing import *
 
+# isort: split
 from utils import *
 
 
@@ -52,7 +52,6 @@ def generate(checkpoint: Path, archive: Path, seed: int = None):
 
     mesh = jax.sharding.Mesh(jax.devices(), 'i')
     replicated = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec())
-    distributed = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec('i'))
 
     # RNG
     seed = hash((checkpoint, seed)) % 2**16
@@ -91,7 +90,7 @@ def fid(archive: Path, run: str, lap: int, seed: int):
     fid = stats['frechet_inception_distance']
     isc = stats['inception_score_mean']
 
-    with open(PATH / f'statistics.csv', mode='a') as f:
+    with open(PATH / 'statistics.csv', mode='a') as f:
         f.write(f'{run},{lap},{seed},{fid},{isc}\n')
 
 

@@ -1,5 +1,6 @@
 r"""FastMRI experiment helpers"""
 
+import math
 import os
 
 from jax import Array
@@ -7,12 +8,13 @@ from jax.experimental.shard_map import shard_map
 from pathlib import Path
 from typing import *
 
+# isort: split
 from priors.common import *
 from priors.data import *
+from priors.diffusion import *
 from priors.image import *
 from priors.nn import *
-from priors.diffusion import *
-
+from priors.optim import *
 
 if 'SCRATCH' in os.environ:
     SCRATCH = os.environ['SCRATCH']
@@ -34,10 +36,7 @@ def complex2real(x: Array) -> Array:
 def fft2c(x: Array, norm: str = 'ortho') -> Array:
     return jnp.fft.fftshift(
         jnp.fft.fft2(
-            jnp.fft.ifftshift(
-                x,
-                axes=(-3, -2)
-            ),
+            jnp.fft.ifftshift(x, axes=(-3, -2)),
             axes=(-3, -2),
             norm=norm,
         ),
@@ -115,7 +114,7 @@ def sample(
         shape=(len(y), 320 * 320 * 1),
         A=inox.Partial(measure, A, shard=True),
         y=flatten(y),
-        sigma_y=1e-2 ** 2,
+        cov_y=1e-2**2,
         key=key,
         **kwargs,
     )

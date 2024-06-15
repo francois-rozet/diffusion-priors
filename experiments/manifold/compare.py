@@ -7,8 +7,8 @@ import wandb
 from dawgz import job, schedule
 from typing import *
 
+# isort: split
 from utils import *
-
 
 CONFIG = {
     'm': 1,
@@ -57,31 +57,31 @@ def evaluate(**config):
     def A(x):
         return jnp.einsum('...ij,...j', W, x)
 
-    sigma_y = config.noise ** 2 * jnp.eye(config.p)
+    cov_y = config.noise**2 * jnp.eye(config.p)
 
     x = mu_i[0]
-    y = rng.multivariate_normal(A(x), sigma_y)
+    y = rng.multivariate_normal(A(x), cov_y)
 
     # Prior
     i = rng.randint((config.samples,), minval=0, maxval=config.components)
     p_x = mu_i[i] + sigma_i[i] * rng.normal((config.samples, config.n))
 
-    sigma_x = jnp.cov(p_x.mT)
+    cov_x = jnp.cov(p_x.mT)
 
     prior = show_corner(p_x)
-    prior.save(runpath / f'prior.png')
+    prior.save(runpath / 'prior.png')
 
     run.log({
         'prior': wandb.Image(prior),
     })
 
     # Posterior
-    log_p_y_x = jax.scipy.stats.multivariate_normal.logpdf(y, A(p_x), sigma_y)
+    log_p_y_x = jax.scipy.stats.multivariate_normal.logpdf(y, A(p_x), cov_y)
 
     p_x_y = rng.choice(p_x, (config.samples,), p=jnp.exp(log_p_y_x))
 
     posterior = show_corner(p_x_y)
-    posterior.save(runpath / f'posterior.png')
+    posterior.save(runpath / 'posterior.png')
 
     # Noisy posterior(s)
     @jax.jit
@@ -99,27 +99,24 @@ def evaluate(**config):
 
         if config.heuristic == 'zero':
             V_x_xt = 0.0 * jnp.eye(config.n)
-        elif config.heuristic == 'sigma_t':
+        elif config.heuristic == 'cov_t':
             V_x_xt = sigma_t**2 * jnp.eye(config.n)
         else:
-            if config.heuristic == 'sigma_x':
-                H = -jnp.linalg.inv(sigma_x + sigma_t**2 * jnp.eye(config.n))
+            if config.heuristic == 'cov_x':
+                H = -jnp.linalg.inv(cov_x + sigma_t**2 * jnp.eye(config.n))
             elif config.heuristic == 'hessian':
                 H = jnp.vectorize(jax.hessian(log_prior), signature='(n),()->(n,n)')(xt, sigma_t)
 
-            V_x_xt = sigma_t**2 * jnp.eye(config.n) + sigma_t ** 4 * H
+            V_x_xt = sigma_t**2 * jnp.eye(config.n) + sigma_t**4 * H
 
-        V_y_xt = sigma_y + A(A(V_x_xt).mT)
+        V_y_xt = cov_y + A(A(V_x_xt).mT)
 
         return jax.scipy.stats.multivariate_normal.logpdf(y, E_y_xt, V_y_xt)
 
     for sigma_t in (0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0):
         p_xt = p_x + sigma_t * rng.normal(p_x.shape)
 
-        log_q_y_xt = [
-            log_likelihood(xt, sigma_t)
-            for xt in jnp.array_split(p_xt, 16, axis=0)
-        ]
+        log_q_y_xt = [log_likelihood(xt, sigma_t) for xt in jnp.array_split(p_xt, 16, axis=0)]
         log_q_y_xt = jnp.concatenate(log_q_y_xt)
 
         q_xt_y = rng.choice(p_xt, (config.samples,), p=jnp.exp(log_q_y_xt))
@@ -141,7 +138,7 @@ if __name__ == '__main__':
     jobs = []
 
     for seed in range(64):
-        for heuristic in ('zero', 'sigma_t', 'sigma_x', 'hessian'):
+        for heuristic in ('zero', 'cov_t', 'cov_x', 'hessian'):
             jobs.append(
                 job(
                     partial(
@@ -161,7 +158,7 @@ if __name__ == '__main__':
 
     schedule(
         *jobs,
-        name=f'Comparison',
+        name='Comparison',
         backend='slurm',
         export='ALL',
         account='ariacpg',

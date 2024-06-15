@@ -1,18 +1,18 @@
 r"""CIFAR experiment helpers"""
 
-import numpy as np
 import os
 
 from jax import Array
 from pathlib import Path
 from typing import *
 
+# isort: split
 from priors.common import *
 from priors.data import *
+from priors.diffusion import *
 from priors.image import *
 from priors.nn import *
-from priors.diffusion import *
-
+from priors.optim import *
 
 if 'SCRATCH' in os.environ:
     SCRATCH = os.environ['SCRATCH']
@@ -33,7 +33,7 @@ def sample(model: nn.Module, y: Array, A: Array, key: Array, **kwargs) -> Array:
         shape=flatten(y).shape,
         A=inox.Partial(measure, A),
         y=flatten(y),
-        sigma_y=1e-3 ** 2,
+        cov_y=1e-3**2,
         key=key,
         **kwargs,
     )

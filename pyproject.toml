@@ -1,0 +1,25 @@
+[project]
+name = "priors"
+version = "0.0.0"
+
+[project.optional-dependencies]
+dev = ["ruff"]
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+extend-select = ["I"]
+ignore = ["F403", "F405", "E731", "E741"]
+
+[tool.ruff.lint.isort]
+lines-between-types = 1
+no-sections = true
+relative-imports-order = "closest-to-furthest"
+
+[tool.ruff.format]
+preview = true
+quote-style = "preserve"
+
+[tool.setuptools]
+packages = ["priors"]

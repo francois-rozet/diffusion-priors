@@ -10,14 +10,14 @@ import seaborn as sb
 
 from functools import partial
 from jax import Array
-from PIL import Image
 from typing import *
 
+# isort: split
 from priors.common import *
+from priors.diffusion import *
 from priors.image import *
 from priors.nn import *
-from priors.diffusion import *
-
+from priors.optim import *
 
 if 'SCRATCH' in os.environ:
     SCRATCH = os.environ['SCRATCH']
@@ -122,7 +122,7 @@ def smooth_manifold(
     a, b, c = jax.random.uniform(key_params, (3, n, m, cutoff))
 
     z = jax.random.uniform(key_z, (*shape, 1, m, 1))
-    x = a / k ** alpha * jnp.sin(2 * jnp.pi * (k * b * z + c))
+    x = a / k**alpha * jnp.sin(2 * jnp.pi * (k * b * z + c))
     x = jnp.sum(x, axis=-1)
     x = jnp.prod(x, axis=-1)
 
