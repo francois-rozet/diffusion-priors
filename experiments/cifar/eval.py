@@ -73,7 +73,7 @@ def generate(checkpoint: Path, archive: Path, seed: int = None):
             shape=(256, 32 * 32 * 3),
             shard=True,
             sampler='ddim',
-            steps=64,
+            steps=256,
             key=rng.split(),
         )
         x = unflatten(x, 32, 32)
