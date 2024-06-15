@@ -73,7 +73,7 @@ def generate(checkpoint: Path, archive: Path, seed: int = None):
             shape=(256, 32 * 32 * 3),
             shard=True,
             sampler='ddim',
-            steps=64,
+            steps=256,
             key=rng.split(),
         )
         x = unflatten(x, 32, 32)
@@ -102,7 +102,12 @@ def fid(archive: Path, run: str, lap: int, seed: int):
 
 
 if __name__ == '__main__':
-    run = 'easy-deluge-92_wubsk6w2'
+    # run = 'brisk-violet-19_j2mcd2x5'   # Tweedie (25%)
+    # run = 'dandy-cherry-17_sspxwzxa'   # Tweedie (50%)
+    run = 'proud-glitter-18_ju7gfg9d'  # Tweedie (75%)
+    # run = 'iconic-disco-20_tw5lit5o'   # (I + Σ_t^{-1})^{-1}
+    # run = 'eager-bush-21_bddhh5lh'     # Σ_t
+
     runpath = PATH / f'runs/{run}'
     seed = 0
 

@@ -28,6 +28,7 @@ CONFIG = {
     # Sampling
     'sampler': 'pc',
     'heuristic': 'cov_x',
+    'sde': {'a': 1e-3, 'b': 1e1},
     'discrete': 4096,
     'maxiter': None,
     # Training
@@ -61,6 +62,9 @@ def train():
     seed = hash(runpath) % 2**16
     rng = inox.random.PRNG(seed)
 
+    # SDE
+    sde = VESDE(**CONFIG.get('sde'))
+
     # Data
     keys = jax.random.split(jax.random.key(config.seed))
 
@@ -84,6 +88,10 @@ def train():
         A=inox.Partial(measure, A),
         y=y,
         cov_y=cov_y,
+        sampler='ddim',
+        sde=sde,
+        steps=256,
+        maxiter=None,
         key=rng.split(),
     )
 
@@ -97,6 +105,7 @@ def train():
                 y=y,
                 cov_y=cov_y,
                 sampler=config.sampler,
+                sde=sde,
                 steps=config.discrete,
                 maxiter=config.maxiter,
                 key=key,
@@ -131,7 +140,7 @@ def train():
     static, params, others = model.partition(nn.Parameter)
 
     # Objective
-    objective = DenoiserLoss()
+    objective = DenoiserLoss(sde=sde)
 
     # Optimizer
     optimizer = Adam(steps=config.epochs, **config)

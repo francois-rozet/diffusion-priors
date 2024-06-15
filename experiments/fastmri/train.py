@@ -17,6 +17,8 @@ from typing import *
 from utils import *
 
 CONFIG = {
+    # Data
+    'duplicate': 2,
     # Architecture
     'hid_channels': (128, 256, 384, 512),
     'hid_blocks': (3, 3, 3, 3),
@@ -27,10 +29,9 @@ CONFIG = {
     # Sampling
     'sampler': 'ddpm',
     'heuristic': None,
+    'sde': {'a': 1e-3, 'b': 1e2},
     'discrete': 64,
     'maxiter': 3,
-    # Data
-    'duplicate': 2,
     # Training
     'epochs': 64,
     'batch_size': 256,
@@ -91,6 +92,9 @@ def train(runid: int, lap: int):
     seed = hash((runpath, lap)) % 2**16
     rng = inox.random.PRNG(seed)
 
+    # SDE
+    sde = VESDE(**CONFIG.get('sde'))
+
     # Data
     dataset = load_from_disk(PATH / 'hf/fastmri-kspace')
     dataset.set_format('numpy')
@@ -117,6 +121,7 @@ def train(runid: int, lap: int):
             y=flatten(y_fit),
             cov_y=1e-2**2,
             sampler='ddim',
+            sde=sde,
             steps=256,
             maxiter=5,
             key=rng.split(),
@@ -138,6 +143,7 @@ def train(runid: int, lap: int):
         batch_size=config.batch_size,
         shard=True,
         sampler=config.sampler,
+        sde=sde,
         steps=config.discrete,
         maxiter=config.maxiter,
     )
@@ -148,6 +154,7 @@ def train(runid: int, lap: int):
         batch_size=config.batch_size,
         shard=True,
         sampler=config.sampler,
+        sde=sde,
         steps=config.discrete,
         maxiter=config.maxiter,
     )
@@ -183,7 +190,7 @@ def train(runid: int, lap: int):
     static, params, others = model.partition(nn.Parameter)
 
     # Objective
-    objective = DenoiserLoss()
+    objective = DenoiserLoss(sde=sde)
 
     # Optimizer
     steps = config.epochs * len(dataset) // config.batch_size
@@ -202,8 +209,8 @@ def train(runid: int, lap: int):
     def augment(x, key):
         keys = jax.random.split(key, 2)
 
-        x = rand_flip(x, keys[0], axis=-2)
-        x = rand_shake(x, keys[1], delta=4)
+        x = random_flip(x, keys[0], axis=-2)
+        x = random_shake(x, keys[1], delta=4)
 
         return x
 
