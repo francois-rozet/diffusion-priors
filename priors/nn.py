@@ -3,8 +3,6 @@ r"""Neural networks"""
 import inox
 import inox.nn as nn
 import jax.numpy as jnp
-import math
-import numpy as np
 
 from einops import rearrange
 from inox.random import PRNG, get_rng, set_rng
@@ -53,34 +51,6 @@ class MLP(nn.Sequential):
         layers = filter(lambda l: l is not None, layers[:-2])
 
         super().__init__(*layers)
-
-
-class PosEmbedding(nn.Module):
-    r"""Creates a 2d positional embedding module."""
-
-    @staticmethod
-    @inox.jit
-    def sincos(H: int, W: int, C: int) -> Array:
-        i, j = np.arange(H), np.arange(W)
-        i, j = i[:, None, None], j[None, :, None]
-
-        w = np.linspace(0, 1, C // 4)
-        w = np.pi / 1e4 ** w
-
-        return np.concatenate(
-            np.broadcast_arrays(
-                np.sin(w * i),
-                np.cos(w * i),
-                np.sin(w * j),
-                np.cos(w * j),
-            ),
-            axis=-1,
-        )
-
-    def __call__(self, x: Array) -> Array:
-        *_, H, W, C = x.shape
-
-        return x + self.sincos(H, W, C)
 
 
 class Modulation(nn.Module):
@@ -179,7 +149,7 @@ class UNet(nn.Module):
         stride = [2 for k in kernel_size]
         kwargs = dict(
             kernel_size=kernel_size,
-            padding=[(k // 2, k // 2) for k in kernel_size]
+            padding=[(k // 2, k // 2) for k in kernel_size],
         )
 
         with set_rng(PRNG(key)):
@@ -187,9 +157,6 @@ class UNet(nn.Module):
 
             for i, blocks in enumerate(hid_blocks):
                 do, up = [], []
-
-                if i in heads:
-                    do.append(PosEmbedding())
 
                 for _ in range(blocks):
                     do.append(ResBlock(hid_channels[i], emb_features, dropout=dropout, **kwargs))
@@ -200,7 +167,8 @@ class UNet(nn.Module):
                         up.append(AttBlock(hid_channels[i], emb_features, heads[i]))
 
                 if i > 0:
-                    do.insert(0,
+                    do.insert(
+                        0,
                         nn.Sequential(
                             nn.Conv(
                                 hid_channels[i - 1],
@@ -209,7 +177,7 @@ class UNet(nn.Module):
                                 **kwargs,
                             ),
                             nn.LayerNorm(),
-                        )
+                        ),
                     )
 
                     up.append(
@@ -223,18 +191,26 @@ class UNet(nn.Module):
                     up.append(nn.Linear(hid_channels[i], out_channels))
 
                 if i + 1 < len(hid_blocks):
-                    up.insert(0,
+                    up.insert(
+                        0,
                         nn.Conv(
                             hid_channels[i] + hid_channels[i + 1],
                             hid_channels[i],
                             **kwargs,
-                        )
+                        ),
                     )
 
                 self.descent.append(do)
                 self.ascent.insert(0, up)
 
     def __call__(self, x: Array, t: Array, key: Array = None) -> Array:
+        r"""
+        Arguments:
+            x: The noisy tensor, with shape :math:`(*, H, W, C)`.
+            t: The time embedding, with shape :math:`(*, T)`.
+            key: A PRNG key.
+        """
+
         if key is None:
             rng = None
         else:

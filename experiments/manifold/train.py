@@ -11,8 +11,8 @@ from dawgz import job, schedule
 from tqdm import tqdm
 from typing import *
 
+# isort: split
 from utils import *
-
 
 CONFIG = {
     # Data
@@ -27,7 +27,7 @@ CONFIG = {
     'normalize': True,
     # Sampling
     'sampler': 'pc',
-    'heuristic': 'sigma_x',
+    'heuristic': 'cov_x',
     'discrete': 4096,
     'maxiter': None,
     # Training
@@ -73,17 +73,17 @@ def train():
     A = jax.random.normal(keys[1], (config.samples, config.observe, config.features))
     A = A / jnp.linalg.norm(A, axis=-1, keepdims=True)
 
-    sigma_y = config.noise * jnp.ones(config.observe)
+    cov_y = config.noise**2 * jnp.ones(config.observe)
 
-    y = measure(A, x) + sigma_y * rng.normal((config.samples, config.observe))
+    y = measure(A, x) + jnp.sqrt(cov_y) * rng.normal((config.samples, config.observe))
 
     ## Moments
-    mu_x, sigma_x = fit_moments(
+    mu_x, cov_x = fit_moments(
         features=config.features,
         rank=config.features,
         A=inox.Partial(measure, A),
         y=y,
-        sigma_y=sigma_y ** 2,
+        cov_y=cov_y,
         key=rng.split(),
     )
 
@@ -95,7 +95,7 @@ def train():
                 shape=(len(y), config.features),
                 A=inox.Partial(measure, A),
                 y=y,
-                sigma_y=sigma_y ** 2,
+                cov_y=cov_y,
                 sampler=config.sampler,
                 steps=config.discrete,
                 maxiter=config.maxiter,
@@ -111,20 +111,20 @@ def train():
 
         return rearrange(x, 'M N ... -> (M N) ...')
 
-    pi = generate(GaussianDenoiser(mu_x, sigma_x))
+    pi = generate(GaussianDenoiser(mu_x, cov_x))
 
     # Model
     model = make_model(key=rng.split(), **CONFIG)
     model.mu_x = mu_x
 
     if config.heuristic == 'zeros':
-        model.sigma_x = jnp.zeros_like(mu_x)
+        model.cov_x = jnp.zeros_like(mu_x)
     elif config.heuristic == 'ones':
-        model.sigma_x = jnp.ones_like(mu_x)
-    elif config.heuristic == 'sigma_t':
-        model.sigma_x = jnp.ones_like(mu_x) * 1e6
-    elif config.heuristic == 'sigma_x':
-        model.sigma_x = sigma_x
+        model.cov_x = jnp.ones_like(mu_x)
+    elif config.heuristic == 'cov_t':
+        model.cov_x = jnp.ones_like(mu_x) * 1e6
+    elif config.heuristic == 'cov_x':
+        model.cov_x = cov_x
 
     model.train(True)
 
@@ -199,7 +199,7 @@ def train():
 if __name__ == '__main__':
     schedule(
         train,
-        name=f'Training',
+        name='Training',
         backend='slurm',
         export='ALL',
         account='ariacpg',

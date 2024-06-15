@@ -91,7 +91,10 @@ class DPLR(NamedTuple):
         if self.U is None:
             return D * x
         else:
-            return D * x - D * jnp.squeeze(self.U @ jnp.linalg.solve(self.W, self.V @ jnp.expand_dims(D * x, axis=-1)), axis=-1)
+            return D * x - D * jnp.squeeze(
+                self.U @ jnp.linalg.solve(self.W, self.V @ jnp.expand_dims(D * x, axis=-1)),
+                axis=-1,
+            )
 
     def diag(self) -> Array:
         if self.U is None:
@@ -101,9 +104,13 @@ class DPLR(NamedTuple):
 
     def norm(self) -> Array:
         if self.U is None:
-            return jnp.sum(self.D ** 2, axis=-1)
+            return jnp.sum(self.D**2, axis=-1)
         else:
-            return jnp.sum(self.D ** 2, axis=-1) + 2 * jnp.einsum('...i,...ij,...ji', self.D, self.U, self.V) + jnp.sum((self.V @ self.U) ** 2, axis=(-1, -2))
+            return (
+                jnp.sum(self.D**2, axis=-1)
+                + 2 * jnp.einsum('...i,...ij,...ji', self.D, self.U, self.V)
+                + jnp.sum((self.V @ self.U) ** 2, axis=(-1, -2))
+            )
 
     def slogdet(self) -> Tuple[Array, Array]:
         sign, logabsdet = jnp.linalg.slogdet(self.W)

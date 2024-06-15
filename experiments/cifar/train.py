@@ -7,14 +7,14 @@ import numpy as np
 import optax
 import wandb
 
-from datasets import load_from_disk, Array3D, Features
+from datasets import Array3D, Features, load_from_disk
 from dawgz import job, schedule
 from functools import partial
 from tqdm import trange
 from typing import *
 
+# isort: split
 from utils import *
-
 
 CONFIG = {
     # Architecture
@@ -109,12 +109,12 @@ def train(runid: int, lap: int):
         y_fit, A_fit = trainset_yA[:16384]['y'], trainset_yA[:16384]['A']
         y_fit, A_fit = jax.device_put((y_fit, A_fit), distributed)
 
-        mu_x, sigma_x = fit_moments(
+        mu_x, cov_x = fit_moments(
             features=32 * 32 * 3,
             rank=64,
             A=inox.Partial(measure, A_fit),
             y=flatten(y_fit),
-            sigma_y=1e-3 ** 2,
+            cov_y=1e-3**2,
             sampler='ddim',
             steps=256,
             maxiter=None,
@@ -123,21 +123,39 @@ def train(runid: int, lap: int):
 
         del y_fit, A_fit
 
-        previous = GaussianDenoiser(mu_x, sigma_x)
+        previous = GaussianDenoiser(mu_x, cov_x)
 
     ## Generate
     static, arrays = previous.partition()
     arrays = jax.device_put(arrays, replicated)
     previous = static(arrays)
 
-    trainset = generate(previous, trainset_yA, rng, config.batch_size, distributed, sampler=config.sampler, steps=config.discrete, maxiter=config.maxiter)
-    testset = generate(previous, testset_yA, rng, config.batch_size, distributed, sampler=config.sampler, steps=config.discrete, maxiter=config.maxiter)
+    trainset = generate(
+        model=previous,
+        dataset=trainset_yA,
+        rng=rng,
+        batch_size=config.batch_size,
+        sharding=distributed,
+        sampler=config.sampler,
+        steps=config.discrete,
+        maxiter=config.maxiter,
+    )
+    testset = generate(
+        model=previous,
+        dataset=testset_yA,
+        rng=rng,
+        batch_size=config.batch_size,
+        sharding=distributed,
+        sampler=config.sampler,
+        steps=config.discrete,
+        maxiter=config.maxiter,
+    )
 
     ## Moments
     x_fit = trainset[:16384]['x']
     x_fit = flatten(x_fit)
 
-    mu_x, sigma_x = ppca(x_fit, rank=64, key=rng.split())
+    mu_x, cov_x = ppca(x_fit, rank=64, key=rng.split())
 
     del x_fit
 
@@ -150,13 +168,13 @@ def train(runid: int, lap: int):
     model.mu_x = mu_x
 
     if config.heuristic == 'zeros':
-        model.sigma_x = jnp.zeros_like(mu_x)
+        model.cov_x = jnp.zeros_like(mu_x)
     elif config.heuristic == 'ones':
-        model.sigma_x = jnp.ones_like(mu_x)
-    elif config.heuristic == 'sigma_t':
-        model.sigma_x = jnp.ones_like(mu_x) * 1e6
-    elif config.heuristic == 'sigma_x':
-        model.sigma_x = sigma_x
+        model.cov_x = jnp.ones_like(mu_x)
+    elif config.heuristic == 'cov_t':
+        model.cov_x = jnp.ones_like(mu_x) * 1e6
+    elif config.heuristic == 'cov_x':
+        model.cov_x = cov_x
 
     model.train(True)
 
@@ -206,10 +224,8 @@ def train(runid: int, lap: int):
         return loss, avrg, params, opt_state
 
     for epoch in (bar := trange(config.epochs, ncols=88)):
-        loader = (
-            trainset
-            .shuffle(seed=seed + lap * config.epochs + epoch)
-            .iter(batch_size=config.batch_size, drop_last_batch=True)
+        loader = trainset.shuffle(seed=seed + lap * config.epochs + epoch).iter(
+            batch_size=config.batch_size, drop_last_batch=True
         )
 
         losses = []
@@ -226,10 +242,7 @@ def train(runid: int, lap: int):
         loss_train = np.stack(losses).mean()
 
         ## Validation
-        loader = (
-            testset
-            .iter(batch_size=config.batch_size, drop_last_batch=True)
-        )
+        loader = testset.iter(batch_size=config.batch_size, drop_last_batch=True)
 
         losses = []
 
@@ -250,7 +263,15 @@ def train(runid: int, lap: int):
             model = static(avrg, others)
             model.train(False)
 
-            x = sample(model, y_eval, A_eval, rng.split(), sampler=config.sampler, steps=config.discrete, maxiter=config.maxiter)
+            x = sample(
+                model=model,
+                y=y_eval,
+                A=A_eval,
+                key=rng.split(),
+                sampler=config.sampler,
+                steps=config.discrete,
+                maxiter=config.maxiter,
+            )
             x = x.reshape(4, 4, 32, 32, 3)
 
             run.log({

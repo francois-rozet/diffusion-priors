@@ -67,7 +67,7 @@ def collate(
         for j in range(N):
             try:
                 W, H = images[i][j].size
-            except:
+            except IndexError:
                 continue
 
     canvas = Image.new(
@@ -88,7 +88,7 @@ def collate(
 
             try:
                 canvas.paste(images[i][j], offset)
-            except:
+            except IndexError:
                 continue
 
     if file is not None:

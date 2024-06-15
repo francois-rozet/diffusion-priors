@@ -4,10 +4,11 @@ import h5py
 import io
 import tarfile
 
-from datasets import load_from_disk, Array3D, Dataset, DatasetDict, Features
-from dawgz import job, after, ensure, schedule
+from datasets import Array3D, Dataset, DatasetDict, Features, load_from_disk
+from dawgz import after, ensure, job, schedule
 from functools import partial
 
+# isort: split
 from utils import *
 
 
@@ -26,7 +27,7 @@ def export():
                 with h5py.File(file) as mri:
                     slices = mri['reconstruction_rss'][10:41]
                     slices = slices / slices.max()  # in [0, 1]
-                    slices = 4 * slices - 2         # in [-2, 2]
+                    slices = 4 * slices - 2  # in [-2, 2]
                     slices = slices[..., None]
 
                     for x in slices:
