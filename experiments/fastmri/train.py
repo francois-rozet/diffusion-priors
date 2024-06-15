@@ -45,7 +45,7 @@ CONFIG = {
 }
 
 
-def generate(model, dataset, rng, batch_size, sharding=None, **kwargs):
+def generate(model, dataset, rng, batch_size, **kwargs):
     def transform(batch):
         y, A = batch['y'], batch['A']
         x = sample(model, y, A, rng.split(), **kwargs)
@@ -112,6 +112,7 @@ def train(runid: int, lap: int):
         mu_x, cov_x = fit_moments(
             features=320 * 320 * 1,
             rank=64,
+            shard=True,
             A=inox.Partial(measure, A_fit, shard=True),
             y=flatten(y_fit),
             cov_y=1e-2**2,
@@ -135,7 +136,7 @@ def train(runid: int, lap: int):
         dataset=trainset_yA,
         rng=rng,
         batch_size=config.batch_size,
-        sharding=distributed,
+        shard=True,
         sampler=config.sampler,
         steps=config.discrete,
         maxiter=config.maxiter,
@@ -145,7 +146,7 @@ def train(runid: int, lap: int):
         dataset=testset_yA,
         rng=rng,
         batch_size=config.batch_size,
-        sharding=distributed,
+        shard=True,
         sampler=config.sampler,
         steps=config.discrete,
         maxiter=config.maxiter,
@@ -269,6 +270,7 @@ def train(runid: int, lap: int):
                 y=y_eval,
                 A=A_eval,
                 key=rng.split(),
+                shard=True,
                 sampler=config.sampler,
                 steps=config.discrete,
                 maxiter=config.maxiter,

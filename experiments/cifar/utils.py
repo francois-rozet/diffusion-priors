@@ -27,10 +27,21 @@ def measure(A: Array, x: Array) -> Array:
     return flatten(A * unflatten(x, 32, 32))
 
 
-def sample(model: nn.Module, y: Array, A: Array, key: Array, **kwargs) -> Array:
+def sample(
+    model: nn.Module,
+    y: Array,
+    A: Array,
+    key: Array,
+    shard: bool = False,
+    **kwargs,
+) -> Array:
+    if shard:
+        y, A = distribute((y, A))
+
     x = sample_any(
         model=model,
         shape=flatten(y).shape,
+        shard=shard,
         A=inox.Partial(measure, A),
         y=flatten(y),
         cov_y=1e-3**2,
