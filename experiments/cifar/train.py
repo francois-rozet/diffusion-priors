@@ -45,10 +45,9 @@ CONFIG = {
 }
 
 
-def generate(model, dataset, rng, batch_size, sharding=None, **kwargs):
+def generate(model, dataset, rng, batch_size, **kwargs):
     def transform(batch):
         y, A = batch['y'], batch['A']
-        y, A = jax.device_put((y, A), sharding)
         x = sample(model, y, A, rng.split(), **kwargs)
         x = np.asarray(x)
 
@@ -112,6 +111,7 @@ def train(runid: int, lap: int):
         mu_x, cov_x = fit_moments(
             features=32 * 32 * 3,
             rank=64,
+            shard=True,
             A=inox.Partial(measure, A_fit),
             y=flatten(y_fit),
             cov_y=1e-3**2,
@@ -135,7 +135,7 @@ def train(runid: int, lap: int):
         dataset=trainset_yA,
         rng=rng,
         batch_size=config.batch_size,
-        sharding=distributed,
+        shard=True,
         sampler=config.sampler,
         steps=config.discrete,
         maxiter=config.maxiter,
@@ -145,7 +145,7 @@ def train(runid: int, lap: int):
         dataset=testset_yA,
         rng=rng,
         batch_size=config.batch_size,
-        sharding=distributed,
+        shard=True,
         sampler=config.sampler,
         steps=config.discrete,
         maxiter=config.maxiter,
@@ -268,6 +268,7 @@ def train(runid: int, lap: int):
                 y=y_eval,
                 A=A_eval,
                 key=rng.split(),
+                shard=True,
                 sampler=config.sampler,
                 steps=config.discrete,
                 maxiter=config.maxiter,

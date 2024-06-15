@@ -28,6 +28,14 @@ def load_module(file: Path) -> nn.Module:
         return pickle.load(f)
 
 
+def distribute(tree: Any) -> Any:
+    mesh = jax.sharding.Mesh(jax.devices(), 'i')
+    spec = jax.sharding.PartitionSpec('i')
+    dist = jax.sharding.NamedSharding(mesh, spec)
+
+    return jax.device_put(tree, dist)
+
+
 @inox.jit
 def ppca(x: Array, key: Array, rank: int = 1) -> Tuple[Array, DPLR]:
     r"""Fits :math:`(\mu_x, \Sigma_x)` by probabilistic principal component analysis (PPCA).
@@ -114,6 +122,7 @@ def fit_moments(
 def sample_any(
     model: nn.Module,
     shape: Sequence[int],
+    shard: bool = False,
     A: Callable[[Array], Array] = None,
     y: Array = None,
     cov_y: Union[Array, DPLR] = None,
@@ -154,6 +163,9 @@ def sample_any(
         sampler = PredictorCorrector(model, **kwargs)
 
     z = jax.random.normal(key, shape)
+
+    if shard:
+        z = distribute(z)
 
     if mu_x is None:
         x1 = sampler.sde(0.0, z, 1.0)

@@ -107,12 +107,17 @@ def sample(
     y: Array,
     A: Array,
     key: Array,
+    shard: bool = False,
     **kwargs,
 ) -> Array:
+    if shard:
+        y, A = distribute((y, A))
+
     x = sample_any(
         model=model,
         shape=(len(y), 320 * 320 * 1),
-        A=inox.Partial(measure, A, shard=True),
+        shard=shard,
+        A=inox.Partial(measure, A, shard=shard),
         y=flatten(y),
         cov_y=1e-2**2,
         key=key,

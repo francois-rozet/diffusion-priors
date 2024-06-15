@@ -68,7 +68,14 @@ def generate(checkpoint: Path, archive: Path, seed: int = None):
     images = []
 
     for _ in tqdm(range(0, 50000, 256), ncols=88):
-        x = sample_any(model, (256, 32 * 32 * 3), key=rng.split(), sampler='ddim', steps=64)
+        x = sample_any(
+            model=model,
+            shape=(256, 32 * 32 * 3),
+            shard=True,
+            sampler='ddim',
+            steps=64,
+            key=rng.split(),
+        )
         x = unflatten(x, 32, 32)
         x = np.asarray(x)
 
