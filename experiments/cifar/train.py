@@ -207,8 +207,7 @@ def train(runid: int, lap: int):
     def augment(x, key):
         keys = jax.random.split(key, 2)
 
-        x = rand_flip(x, keys[0], axis=-2)
-        x = rand_shake(x, keys[1], delta=1)
+        x = random_horizontal_flip(x, keys[0])
 
         return x
 

@@ -97,15 +97,11 @@ def collate(
     return canvas
 
 
-def rand_flip(x: Array, key: Array, axis: int = -2) -> Array:
-    return jnp.where(
-        jax.random.bernoulli(key),
-        x,
-        jnp.flip(x, axis=axis),
-    )
+def random_horizontal_flip(x: Array, key: Array) -> Array:
+    return pix.random_flip_left_right(key, x)
 
 
-def rand_shake(x: Array, key: Array, delta: int = 1, mode: str = 'reflect') -> Array:
+def random_shake(x: Array, key: Array, delta: int = 1, mode: str = 'symmetric') -> Array:
     i = jax.random.randint(key, shape=(3,), minval=0, maxval=2 * delta + 1)
     i = i.at[-1].set(0)
 
