@@ -105,6 +105,22 @@ def random_flip(x: Array, key: Array, axis: int = -2) -> Array:
     )
 
 
+def random_hue(x: Array, key: Array, delta: float = 1e-2) -> Array:
+    x = (x + 2) / 4
+    x = pix.random_hue(key, x, delta)
+    x = x * 4 - 2
+
+    return x
+
+
+def random_saturation(x: Array, key: Array, lower: float = 0.95, upper: float = 1.05) -> Array:
+    x = (x + 2) / 4
+    x = pix.random_saturation(key, x, lower, upper)
+    x = x * 4 - 2
+
+    return x
+
+
 def random_shake(x: Array, key: Array, delta: int = 1, mode: str = 'reflect') -> Array:
     i = jax.random.randint(key, shape=(3,), minval=0, maxval=2 * delta + 1)
     i = i.at[-1].set(0)

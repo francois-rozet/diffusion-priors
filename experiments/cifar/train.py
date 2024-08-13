@@ -205,10 +205,11 @@ def train(runid: int, lap: int):
     @jax.jit
     @jax.vmap
     def augment(x, key):
-        keys = jax.random.split(key, 2)
+        keys = jax.random.split(key, 3)
 
         x = random_flip(x, keys[0], axis=-2)
-        x = random_shake(x, keys[1], delta=1)
+        x = random_hue(x, keys[1], delta=1e-2)
+        x = random_saturation(x, keys[2], lower=0.95, upper=1.05)
 
         return x
 
