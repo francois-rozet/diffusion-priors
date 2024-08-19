@@ -41,6 +41,8 @@ launches the training jobs with the default config (specified within the file).
 
 For the accelerated MRI experiment, the `knee_singlecoil_{train|val}.tar.xz` archives should be obtained from the [NYU fastMRI Initiative database](https://fastmri.med.nyu.edu/).
 
+The code for the evaluation of MMPS (in Appendix E) is provided in the separate [mmps-benchmark](https://github.com/francois-rozet/mmps-benchmark) repository.
+
 ## Citation
 
 If you find this paper or code useful for your research, please consider citing
