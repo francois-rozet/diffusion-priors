@@ -45,14 +45,15 @@ The code for the evaluation of MMPS (in Appendix E) is provided in the separate 
 
 ## Citation
 
-If you find this paper or code useful for your research, please consider citing
+If you find this project useful for your research, please consider citing
 
 ```bib
-@unpublished{Rozet2024Learning,
-  author = {Rozet, François and Andry, Gérôme and Lanusse, François and Louppe, Gilles},
-  title  = {Learning Diffusion Priors from Observations by Expectation Maximization},
-  year   = {2024},
-  url    = {http://arxiv.org/abs/2405.13712},
+@inproceedings{rozet2024learning,
+  title={Learning Diffusion Priors from Observations by Expectation Maximization},
+  author={Fran{\c{c}}ois Rozet and G{\'e}r{\^o}me Andry and Fran{\c{c}}ois Lanusse and Gilles Louppe},
+  booktitle={The Thirty-eighth Annual Conference on Neural Information Processing Systems},
+  year={2024},
+  url={https://openreview.net/forum?id=7v88Fh6iSM},
 }
 ```
 
